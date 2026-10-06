@@ -1,5 +1,5 @@
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,6 +27,21 @@ describe("CLI", () => {
       env,
       timeout: 10_000,
     });
+  }
+
+  function git(...args: string[]) {
+    execFileSync("git", args, { cwd: directory, windowsHide: true, stdio: "pipe" });
+  }
+
+  function initializeRepository() {
+    git("init", "--quiet");
+    git("config", "user.name", "ChangeRadar Test");
+    git("config", "user.email", "test@example.com");
+    git("config", "commit.gpgsign", "false");
+    git("config", "core.autocrlf", "false");
+    writeFileSync(join(directory, "README.md"), "Test repository\n");
+    git("add", ".");
+    git("commit", "--quiet", "-m", "Initial fixture");
   }
 
   it("displays help without requiring a Git repository", () => {
@@ -62,5 +77,44 @@ describe("CLI", () => {
     const result = run(["analyze"], { ...env, PATH: "" });
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("Git could not be started");
+  });
+
+  it("reports a clean repository with exit code 0", () => {
+    initializeRepository();
+    const result = run(["analyze"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("0 files changed against HEAD");
+    expect(result.stdout).toContain("No changed files to analyze.");
+    expect(result.stderr).toBe("");
+  });
+
+  it("reports unrelated edits without findings or raw file contents", () => {
+    initializeRepository();
+    writeFileSync(join(directory, "README.md"), "Content that must not be printed\n");
+    const result = run(["analyze"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("1 file changed against HEAD");
+    expect(result.stdout).toContain("0 deployment impacts detected");
+    expect(result.stdout).not.toContain("Content that must not be printed");
+  });
+
+  it("reports staged migrations with exit code 1 and one shared deployment check", () => {
+    initializeRepository();
+    for (const name of ["first", "second"]) {
+      const migrationDirectory = join(directory, "prisma", "migrations", name);
+      mkdirSync(migrationDirectory, { recursive: true });
+      writeFileSync(join(migrationDirectory, "migration.sql"), "CREATE TABLE orders (id INT);\n");
+    }
+    git("add", "prisma");
+    const result = run(["analyze"]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("2 files changed against HEAD");
+    expect(result.stdout).toContain("2 deployment impacts detected");
+    expect(result.stdout).toContain("\nHIGH\n");
+    expect(result.stdout).toContain('"prisma/migrations/first/migration.sql"');
+    expect(result.stdout).toContain('"prisma/migrations/second/migration.sql"');
+    expect(result.stdout.match(/\[ \]/g)).toHaveLength(1);
+    expect(result.stdout).not.toContain("CREATE TABLE");
+    expect(result.stderr).toBe("");
   });
 });

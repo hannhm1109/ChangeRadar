@@ -3,7 +3,8 @@ export type ChangeRadarErrorCode =
   | "NOT_A_REPOSITORY"
   | "NO_COMMITS"
   | "GIT_EXECUTION_FAILED"
-  | "INVALID_GIT_OUTPUT";
+  | "INVALID_GIT_OUTPUT"
+  | "DETECTOR_FAILED";
 
 export class ChangeRadarError extends Error {
   constructor(

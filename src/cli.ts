@@ -3,6 +3,9 @@ import { readFileSync } from "node:fs";
 import { Command, CommanderError } from "commander";
 import { ChangeRadarError } from "./errors/ChangeRadarError.js";
 import { getChanges } from "./git/gitAdapter.js";
+import { runDetectors } from "./core/runDetectors.js";
+import { migrationDetector } from "./detectors/migrationDetector.js";
+import { formatTerminalReport } from "./reporters/terminalReporter.js";
 
 const { version } = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
@@ -16,20 +19,13 @@ const program = new Command()
   .exitOverride();
 
 program.command("analyze")
-  .description("List staged and unstaged tracked-file changes against HEAD")
+  .description("Analyze staged and unstaged tracked-file changes against HEAD")
   .addHelpText("after", "\nNew files must be staged with git add to appear in the analysis.")
   .action(async () => {
     const context = await getChanges();
-    const count = context.files.length;
-    const lines = ["ChangeRadar", "", `${count} ${count === 1 ? "file" : "files"} changed against HEAD`];
-    for (const file of context.files) {
-      const path = JSON.stringify(file.path);
-      lines.push(file.status === "renamed"
-        ? `  renamed   ${JSON.stringify(file.previousPath)} -> ${path}`
-        : `  ${file.status.padEnd(9)} ${path}`);
-    }
-    lines.push("", "Deployment detectors are not implemented yet.");
-    process.stdout.write(`${lines.join("\n")}\n`);
+    const findings = runDetectors(context, [migrationDetector]);
+    process.stdout.write(formatTerminalReport(context, findings));
+    process.exitCode = findings.some((finding) => finding.severity === "HIGH") ? 1 : 0;
   });
 
 try {

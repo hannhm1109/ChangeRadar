@@ -9,3 +9,19 @@ export interface ChangeContext {
   files: ChangedFile[];
   diff: string;
 }
+
+export type Severity = "LOW" | "MEDIUM" | "HIGH";
+
+export interface Finding {
+  detector: string;
+  severity: Severity;
+  title: string;
+  description?: string;
+  files: string[];
+  suggestedAction?: string;
+}
+
+export interface Detector {
+  name: string;
+  detect(context: ChangeContext): Finding[];
+}

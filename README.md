@@ -4,7 +4,9 @@ ChangeRadar analyzes Git changes to highlight modifications that may affect depl
 
 ## Current Status
 
-Phase 1 is complete: the TypeScript CLI and Git adapter are implemented. The current CLI lists changed files; deployment detectors will be added in subsequent phases.
+Phase 2 is complete: the CLI collects Git changes, runs independent detectors, and prints a severity-grouped report with suggested deployment checks.
+
+The first detector reports added Prisma migration files at `prisma/migrations/<name>/migration.sql` as HIGH. Modified, deleted, or renamed migrations, other migration directories, and the remaining detector categories will be implemented in subsequent phases. A report with no findings does not establish that a deployment is safe.
 
 ## Local Development
 
@@ -30,31 +32,40 @@ node dist/cli.js analyze
 
 New untracked files are excluded. Run `git add <file>` to include a new file. A repository must have an initial commit. Git references and ranges will be added in a later phase.
 
-The current output lists added, modified, deleted, and renamed files. Paths are quoted and escaped so tabs and newlines cannot break the report. File contents and raw diffs are not printed.
+The report includes changed-file and finding counts, then groups findings by HIGH, MEDIUM, and LOW severity. Each finding lists the relevant files. Suggested checks are deduplicated. Paths are quoted and escaped so tabs and newlines cannot break the report. File contents and raw diffs are not printed.
 
 ```text
 ChangeRadar
 
 2 files changed against HEAD
-  added     "prisma/migrations/20261006_init/migration.sql"
-  modified  "app/api/orders/route.ts"
+1 deployment impact detected
 
-Deployment detectors are not implemented yet.
+HIGH
+  Database migration added
+    "prisma/migrations/20261006_init/migration.sql"
+
+Suggested deployment checks:
+  [ ] Review and apply database migrations before deployment.
 ```
 
 ## Architecture
 
 ```text
-CLI -> Git adapter -> ChangeContext
+CLI -> Git adapter -> ChangeContext -> Detectors -> Findings -> Terminal reporter
 ```
 
-- `src/cli.ts` owns command parsing and terminal output.
+- `src/cli.ts` coordinates analysis, writes the completed report, and selects an exit code.
 - `src/git/gitAdapter.ts` runs Git through Node's `execFile`, passing arguments without a shell.
 - `src/git/parseNameStatus.ts` parses null-delimited file statuses, preserving unusual filenames and rename paths.
-- `src/core/types.ts` defines changed files and the context containing the repository root, changed files, and zero-context patch.
+- `src/core/types.ts` defines the change context, severity, structured findings, and detector interface.
+- `src/core/runDetectors.ts` runs detectors, deduplicates equivalent findings, and orders them by severity.
+- `src/detectors/migrationDetector.ts` implements the initial Prisma migration addition rule.
+- `src/reporters/terminalReporter.ts` formats findings without running Git or printing directly.
 - `src/errors/ChangeRadarError.ts` provides typed errors with user-facing messages.
 
-The next phase adds independent detectors that return structured findings and a separate terminal reporter.
+Each detector implements `name` and `detect(context): Finding[]`. To add a detector, implement that interface and register it in the CLI's detector list. Detection stays independent of formatting, so the same findings can later support another output format.
+
+Duplicate findings have the same detector, severity, title, description, file set, and suggested action. Different files or advice remain separate findings. A detector failure stops analysis with a tool error instead of producing an incomplete success report.
 
 ## Checks
 
@@ -64,11 +75,12 @@ npm test
 npm run build
 ```
 
-Tests cover Git output parsing and real temporary Git repositories, including staged and unstaged changes, renames, deletions, subdirectories, and invalid repository states.
+Tests cover Git parsing, real temporary Git repositories, the detector runner, migration matching, report formatting, and complete CLI analysis with exit codes.
 
 ## Exit Codes
 
-- `0`: file inspection completed, or help/version displayed.
+- `0`: analysis completed with no HIGH findings, or help/version displayed.
+- `1`: HIGH deployment-impact findings detected.
 - `2`: CLI usage or tool execution error.
 
-Exit code `1` will represent HIGH findings after deployment detection is implemented. Success currently means file inspection completed, not that a deployment is safe.
+ChangeRadar highlights detected impacts; humans still decide whether and how to deploy.
