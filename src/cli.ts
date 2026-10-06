@@ -22,8 +22,9 @@ program.command("analyze")
   .description("Analyze staged and unstaged tracked-file changes against HEAD")
   .addHelpText("after", "\nNew files must be staged with git add to appear in the analysis.")
   .action(async () => {
-    const context = await getChanges();
-    const findings = runDetectors(context, [migrationDetector]);
+    const { environmentDetector, isEnvironmentSource } = await import("./detectors/environmentDetector.js");
+    const context = await getChanges(process.cwd(), { includeContent: isEnvironmentSource });
+    const findings = runDetectors(context, [migrationDetector, environmentDetector]);
     process.stdout.write(formatTerminalReport(context, findings));
     process.exitCode = findings.some((finding) => finding.severity === "HIGH") ? 1 : 0;
   });

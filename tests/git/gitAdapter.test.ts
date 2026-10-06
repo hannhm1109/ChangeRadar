@@ -95,4 +95,54 @@ describe("getChanges with a real repository", () => {
     execFileSync("git", ["init", "--quiet"], { cwd: empty, windowsHide: true });
     await expect(getChanges(empty)).rejects.toMatchObject({ code: "NO_COMMITS" });
   });
+
+  it("loads selected before-and-after contents from HEAD and the current working tree", async () => {
+    writeFileSync(join(directory, "existing.ts"), "const staged = process.env.STAGED;\n");
+    git("add", "existing.ts");
+    writeFileSync(join(directory, "existing.ts"), "const current = process.env.CURRENT;\n");
+    writeFileSync(join(directory, "unrelated.txt"), "excluded contents\n");
+    git("add", "unrelated.txt");
+    const context = await getChanges(directory, { includeContent: (path) => path.endsWith(".ts") });
+    expect(context.fileContents).toEqual([{
+      path: "existing.ts", before: "export const value = 1;\n", after: "const current = process.env.CURRENT;\n",
+    }]);
+  });
+
+  it("loads empty sides for added and deleted sources and preserves rename paths", async () => {
+    writeFileSync(join(directory, "added.ts"), "process.env.NEW_KEY;\n");
+    git("add", "added.ts");
+    unlinkSync(join(directory, "deleted.ts"));
+    git("mv", "existing.ts", "renamed [1].ts");
+    const context = await getChanges(directory, { includeContent: (path) => path.endsWith(".ts") });
+    expect(context.fileContents).toEqual([
+      { path: "added.ts", before: "", after: "process.env.NEW_KEY;\n" },
+      { path: "deleted.ts", before: "export const deleted = true;\n", after: "" },
+      { path: "renamed [1].ts", previousPath: "existing.ts", before: "export const value = 1;\n", after: "export const value = 1;\n" },
+    ]);
+  });
+
+  it("excludes real environment-file values from patches while preserving file metadata", async () => {
+    writeFileSync(join(directory, ".env.local"), "API_KEY=old-private-value\n");
+    git("add", "--force", ".env.local");
+    git("commit", "--quiet", "-m", "Track a secret-file fixture");
+    writeFileSync(join(directory, ".env.local"), "API_KEY=new-private-value\n");
+    writeFileSync(join(directory, ".env.example"), "PUBLIC_NAME=placeholder\n");
+    git("add", "--force", ".env.example");
+    const context = await getChanges(directory, { includeContent: (path) => path.endsWith(".ts") });
+    expect(context.files).toContainEqual({ status: "modified", path: ".env.local" });
+    expect(context.diff).not.toContain("private-value");
+    expect(context.diff).toContain("PUBLIC_NAME=placeholder");
+    expect(context.fileContents).toEqual([]);
+    const allContents = await getChanges(directory, { includeContent: () => true });
+    expect(allContents.fileContents?.map((file) => file.path)).toEqual([".env.example"]);
+    expect(JSON.stringify(allContents.fileContents)).not.toContain("private-value");
+  });
+
+  it("does not load the unsupported side of a renamed source", async () => {
+    git("mv", "existing.ts", "renamed.txt");
+    const context = await getChanges(directory, { includeContent: (path) => path.endsWith(".ts") });
+    expect(context.fileContents).toEqual([{
+      path: "renamed.txt", previousPath: "existing.ts", before: "export const value = 1;\n", after: "",
+    }]);
+  });
 });

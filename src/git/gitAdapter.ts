@@ -1,10 +1,60 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { ChangeContext } from "../core/types.js";
+import { lstat, readFile } from "node:fs/promises";
+import { join } from "node:path";
+import type { ChangeContext, ChangedFile, FileContentChange } from "../core/types.js";
 import { ChangeRadarError } from "../errors/ChangeRadarError.js";
 import { parseNameStatus } from "./parseNameStatus.js";
 
 const execFileAsync = promisify(execFile);
+
+export interface GitChangeOptions {
+  includeContent?: (path: string) => boolean;
+}
+
+function isSecretEnvironmentFile(path: string): boolean {
+  return /(?:^|\/)\.env(?:\..*)?$/.test(path) && !/(?:^|\/)\.env\.example$/.test(path);
+}
+
+async function readWorkingFile(repositoryRoot: string, path: string): Promise<string> {
+  try {
+    const absolutePath = join(repositoryRoot, path);
+    const info = await lstat(absolutePath);
+    // Do not follow source-file symlinks into secret files or external locations.
+    if (!info.isFile()) return "";
+    if (info.size > 20 * 1024 * 1024) throw new Error("File exceeds the content limit");
+    return await readFile(absolutePath, "utf8");
+  } catch (cause) {
+    throw new ChangeRadarError(
+      "FILE_READ_FAILED",
+      `Unable to read changed file ${JSON.stringify(path)}. Check access and file size.`,
+      { cause },
+    );
+  }
+}
+
+async function readCommittedFile(repositoryRoot: string, path: string): Promise<string> {
+  const entry = await runGit(["ls-tree", "-z", "HEAD", "--", path], repositoryRoot);
+  if (!entry.startsWith("100")) return "";
+  return runGit(["show", `HEAD:${path}`], repositoryRoot);
+}
+
+async function readContentChange(
+  repositoryRoot: string,
+  file: ChangedFile,
+  includeContent: (path: string) => boolean,
+): Promise<FileContentChange> {
+  const previousPath = file.status === "renamed" ? file.previousPath : file.path;
+  const before = file.status !== "added" && includeContent(previousPath)
+    ? await readCommittedFile(repositoryRoot, previousPath)
+    : "";
+  const after = file.status !== "deleted" && includeContent(file.path)
+    ? await readWorkingFile(repositoryRoot, file.path)
+    : "";
+  return file.status === "renamed"
+    ? { path: file.path, previousPath, before, after }
+    : { path: file.path, before, after };
+}
 
 async function runGit(args: string[], cwd: string): Promise<string> {
   try {
@@ -41,7 +91,7 @@ function gitStderr(error: unknown): string {
 }
 
 /** Reads the net staged and unstaged changes to tracked files against HEAD. */
-export async function getChanges(cwd = process.cwd()): Promise<ChangeContext> {
+export async function getChanges(cwd = process.cwd(), options: GitChangeOptions = {}): Promise<ChangeContext> {
   let repositoryRoot: string;
   try {
     repositoryRoot = (await runGit(["rev-parse", "--show-toplevel"], cwd))
@@ -76,10 +126,25 @@ export async function getChanges(cwd = process.cwd()): Promise<ChangeContext> {
     repositoryRoot,
   );
   const files = parseNameStatus(nameStatus);
+  const secretPaths = new Set(files.flatMap((file) => file.status === "renamed"
+    ? [file.previousPath, file.path] : [file.path]).filter(isSecretEnvironmentFile));
   const diff = files.length === 0 ? "" : await runGit(
-    ["diff", ...diffOptions, "--no-color", "--unified=0", "HEAD", "--"],
+    ["diff", ...diffOptions, "--no-color", "--unified=0", "HEAD", "--", ".",
+      ...[...secretPaths].map((path) => `:(exclude,literal)${path}`)],
     repositoryRoot,
   );
 
-  return { repositoryRoot, files, diff };
+  const context: ChangeContext = { repositoryRoot, files, diff };
+  const contentFilter = options.includeContent;
+  if (contentFilter) {
+    const includeContent = (path: string) => !isSecretEnvironmentFile(path) && contentFilter(path);
+    context.fileContents = [];
+    for (const file of files) {
+      if (includeContent(file.path)
+        || (file.status === "renamed" && includeContent(file.previousPath))) {
+        context.fileContents.push(await readContentChange(repositoryRoot, file, includeContent));
+      }
+    }
+  }
+  return context;
 }

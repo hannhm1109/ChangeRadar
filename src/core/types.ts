@@ -8,6 +8,14 @@ export interface ChangeContext {
   repositoryRoot: string;
   files: ChangedFile[];
   diff: string;
+  fileContents?: FileContentChange[];
+}
+
+export interface FileContentChange {
+  path: string;
+  previousPath?: string;
+  before: string;
+  after: string;
 }
 
 export type Severity = "LOW" | "MEDIUM" | "HIGH";

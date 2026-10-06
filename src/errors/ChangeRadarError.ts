@@ -4,6 +4,8 @@ export type ChangeRadarErrorCode =
   | "NO_COMMITS"
   | "GIT_EXECUTION_FAILED"
   | "INVALID_GIT_OUTPUT"
+  | "FILE_READ_FAILED"
+  | "INVALID_SOURCE"
   | "DETECTOR_FAILED";
 
 export class ChangeRadarError extends Error {

@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -116,5 +116,81 @@ describe("CLI", () => {
     expect(result.stdout.match(/\[ \]/g)).toHaveLength(1);
     expect(result.stdout).not.toContain("CREATE TABLE");
     expect(result.stderr).toBe("");
+  });
+
+  it("reports environment names once across source and example files without values", () => {
+    initializeRepository();
+    writeFileSync(join(directory, "config.ts"), "const key = process.env.PAYMENT_API_KEY;\n");
+    writeFileSync(join(directory, ".env.example"), "PAYMENT_API_KEY=example-private-value\n");
+    writeFileSync(join(directory, ".env.local"), "REAL_SECRET=actual-private-value\n");
+    git("add", "--force", "config.ts", ".env.example", ".env.local");
+    const result = run(["analyze"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("1 deployment impact detected");
+    expect(result.stdout).toContain("\nMEDIUM\n");
+    expect(result.stdout).toContain("New environment variable detected: PAYMENT_API_KEY");
+    expect(result.stdout).toContain('"config.ts"');
+    expect(result.stdout).toContain('".env.example"');
+    expect(result.stdout).not.toContain("REAL_SECRET");
+    expect(result.stdout).not.toContain("private-value");
+    expect(result.stderr).toBe("");
+  });
+
+  it("reports only new environment names after unstaged edits to committed code", () => {
+    initializeRepository();
+    writeFileSync(join(directory, "config.ts"), "const existing = process.env.EXISTING;\n");
+    git("add", "config.ts");
+    git("commit", "--quiet", "-m", "Existing environment reference");
+    writeFileSync(join(directory, "config.ts"), "const renamed = process.env.EXISTING;\nconst added = process.env.ADDED;\n");
+    const result = run(["analyze"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("New environment variable detected: ADDED");
+    expect(result.stdout).not.toContain("EXISTING");
+  });
+
+  it("reports both detectors and retains the HIGH exit code", () => {
+    initializeRepository();
+    mkdirSync(join(directory, "database", "migrations"), { recursive: true });
+    writeFileSync(join(directory, "database", "migrations", "001.sql"), "CREATE TABLE orders (id INT);\n");
+    writeFileSync(join(directory, "config.js"), "process.env.API_URL;\n");
+    git("add", ".");
+    const result = run(["analyze"]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("2 deployment impacts detected");
+    expect(result.stdout).toContain("Database migration added");
+    expect(result.stdout).toContain("New environment variable detected: API_URL");
+    expect(result.stdout.indexOf("\nHIGH\n")).toBeLessThan(result.stdout.indexOf("\nMEDIUM\n"));
+  });
+
+  it("reports modified, deleted, and moved migration files through Git", () => {
+    initializeRepository();
+    mkdirSync(join(directory, "migrations"));
+    for (const name of ["modified", "deleted", "moved"]) {
+      writeFileSync(join(directory, "migrations", `${name}.sql`), `-- ${name}\nCREATE TABLE ${name} (id INT);\n`);
+    }
+    git("add", "migrations");
+    git("commit", "--quiet", "-m", "Existing migrations");
+    writeFileSync(join(directory, "migrations", "modified.sql"), "-- modified\nCREATE TABLE modified (id TEXT);\n");
+    unlinkSync(join(directory, "migrations", "deleted.sql"));
+    git("mv", "migrations/moved.sql", "archived.sql");
+    const result = run(["analyze"]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("3 deployment impacts detected");
+    expect(result.stdout).toContain("Database migration modified");
+    expect(result.stdout).toContain("Database migration deleted");
+    expect(result.stdout).toContain("Database migration renamed");
+    expect(result.stdout).toContain("Moved out of a migration directory.");
+  });
+
+  it("fails with a useful syntax error without exposing source contents", () => {
+    initializeRepository();
+    writeFileSync(join(directory, "broken.ts"), 'const token = "never-print-this-value');
+    git("add", "broken.ts");
+    const result = run(["analyze"]);
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain('Unable to parse environment references in "broken.ts"');
+    expect(result.stderr).not.toContain("never-print-this-value");
+    expect(result.stderr).not.toContain("SyntaxError");
   });
 });

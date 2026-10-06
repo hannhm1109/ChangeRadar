@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChangeContext, Detector, Finding } from "../../src/core/types.js";
 import { runDetectors } from "../../src/core/runDetectors.js";
+import { ChangeRadarError } from "../../src/errors/ChangeRadarError.js";
 
 const context: ChangeContext = { repositoryRoot: "/repo", files: [], diff: "" };
 const finding: Finding = {
@@ -56,5 +57,11 @@ describe("runDetectors", () => {
     expect(() => runDetectors(context, [detector([finding]), broken])).toThrow(
       expect.objectContaining({ code: "DETECTOR_FAILED", cause }),
     );
+  });
+
+  it("preserves useful typed detector errors", () => {
+    const error = new ChangeRadarError("INVALID_SOURCE", "Unable to parse config.ts");
+    const broken: Detector = { name: "environment", detect() { throw error; } };
+    expect(() => runDetectors(context, [broken])).toThrow(error);
   });
 });

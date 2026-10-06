@@ -11,6 +11,7 @@ export function runDetectors(context: ChangeContext, detectors: readonly Detecto
     try {
       findings = detector.detect(context);
     } catch (cause) {
+      if (cause instanceof ChangeRadarError) throw cause;
       throw new ChangeRadarError(
         "DETECTOR_FAILED",
         `Detector "${detector.name}" failed. Analysis could not be completed.`,
