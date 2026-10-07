@@ -17,13 +17,19 @@ export interface JsonReport {
 }
 
 export function formatJsonReport(context: ChangeContext, findings: readonly Finding[]): string {
+  const comparison = context.comparison;
   const bySeverity: Record<Severity, number> = { HIGH: 0, MEDIUM: 0, LOW: 0 };
   for (const finding of findings) bySeverity[finding.severity]++;
 
   // Serialize report metadata explicitly, never the context's patches or content snapshots.
   const report: JsonReport = {
     schemaVersion: 1,
-    comparison: context.comparison ?? null,
+    comparison: comparison === undefined ? null : comparison.mode === "working-tree"
+      ? { mode: comparison.mode, baseRef: comparison.baseRef, baseCommit: comparison.baseCommit }
+      : {
+        mode: comparison.mode, baseRef: comparison.baseRef, targetRef: comparison.targetRef,
+        baseCommit: comparison.baseCommit, targetCommit: comparison.targetCommit,
+      },
     summary: {
       changedFileCount: context.files.length,
       findingCount: findings.length,

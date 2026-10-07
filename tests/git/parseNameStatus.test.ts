@@ -26,7 +26,11 @@ describe("parseNameStatus", () => {
       expect(parseNameStatus(`M\0${path}\0`)).toEqual([{ status: "modified", path }]);
     });
 
-  it.each(["M\0file.ts", "M\0", "M\0\0", "R100\0old.ts\0", "R101\0old\0new\0", "U\0file\0", "C100\0old\0new\0", "X\0file\0", "M\tfile.ts\n"])
+  it("identifies unresolved conflicts without treating them as ordinary changes", () => {
+    expect(() => parseNameStatus("U\0file.ts\0")).toThrow(expect.objectContaining({ code: "UNMERGED_CHANGES" }));
+  });
+
+  it.each(["M\0file.ts", "M\0", "M\0\0", "R100\0old.ts\0", "R101\0old\0new\0", "U\0\0", "C100\0old\0new\0", "X\0file\0", "M\tfile.ts\n"])
     ("rejects malformed or unsupported output %j", (output) => {
       expect(() => parseNameStatus(output)).toThrow("unexpected name-status output");
     });

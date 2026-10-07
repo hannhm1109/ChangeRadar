@@ -81,6 +81,12 @@ describe("migrationDetector", () => {
     expect(detect([])).toEqual([]);
   });
 
+  it.each(["migrations/line\nbreak.sql", "database/migrations/line\rbreak.ts", "migrations/nested\nname/001.py"])(
+    "preserves detection for unusual migration path %j", (path) => {
+      expect(detect([{ status: "added", path }])[0]).toMatchObject({ severity: "HIGH", files: [path] });
+    },
+  );
+
   it("ignores a rename between unrelated paths", () => {
     expect(detect([{ status: "renamed", previousPath: "old.sql", path: "new.sql" }])).toEqual([]);
   });

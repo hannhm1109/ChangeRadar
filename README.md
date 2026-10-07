@@ -4,15 +4,35 @@ ChangeRadar analyzes Git changes to highlight modifications that may affect depl
 
 ## Current Status
 
-Phase 7 is complete: all five MVP detector categories support terminal or versioned JSON reports, consistent CI exit codes, Git reference/range comparisons, and a GitHub Actions usage example.
+Phase 8 is complete: the five MVP detectors, text/JSON reports, Git comparisons, and CI example have been reviewed and regression-tested, including privacy, merge-conflict, output-stream, and large-diff edge cases. A runnable temporary-repository demo is included.
 
-Migration findings have HIGH severity; environment, API-route, and cron/config findings have MEDIUM severity; dependency findings have LOW severity. A report with no findings does not establish that a deployment is safe. Final polish and release preparation remain separate phases; the package is not published to npm yet.
+Migration findings have HIGH severity; environment, API-route, and cron/config findings have MEDIUM severity; dependency findings have LOW severity. A report with no findings does not establish that a deployment is safe. Release preparation is the next phase; the package is not published to npm yet.
+
+## Try the Demo
+
+```bash
+npm ci --ignore-scripts
+npm run build
+npm run demo
+```
+
+The demo creates a temporary Git repository with two commits, analyzes them with the compiled CLI, and removes only its own temporary directory afterward. It does not change your checkout or Git settings, install sample dependencies, run route handlers, or execute SQL/cron jobs.
+
+The second commit adds a Prisma migration, introduces `PAYMENT_API_KEY` in code and an example template, edits `/api/orders`, adds `stripe`, and changes a cron schedule. Expect **6 changed files and 5 findings**: one HIGH, three MEDIUM, and one LOW. The demo intentionally exits `1` because of the migration.
+
+For a machine-readable demo report, invoke the script directly so npm headers do not enter stdout:
+
+```bash
+node scripts/demo.mjs --format json > demo-report.json
+```
 
 ## Supported Detectors
 
 Environment detection compares variable names in the before-and-after versions of changed JS/TS files and `.env.example` templates. It supports `process.env.NAME`, static `process.env["NAME"]` access, and optional chaining, including JSX/TSX and CommonJS/ES module extensions. One finding per new name lists all matching changed files. Comments, string examples, formatting edits, removed names, value-only template edits, and names moved between changed files do not produce findings.
 
 Only template keys and code references are reported. Actual `.env`, `.env.local`, and other `.env.*` files are excluded from content snapshots and raw patches, except `.env.example`. Source-file symlinks are not followed. No values or raw source are printed.
+
+Both paths of a Git-detected rename involving a private environment file are excluded from raw patches. If such a file is renamed into a supported source, template, or manifest path, content analysis stops with a clear tool error instead of reading the renamed secrets or silently claiming a clean result. Review that rename manually; comparisons after the rename has already been committed can inspect subsequent ordinary changes.
 
 Migration detection reports added, modified, deleted, and renamed files under these root-relative patterns:
 
@@ -85,6 +105,8 @@ A single reference can be a branch, tag, commit hash, or a revision such as `HEA
 
 In working-tree mode, new untracked files are excluded. Run `git add <file>` to include a new file. A repository must have an initial commit. In range mode, files and detector snapshots come entirely from the selected commits, even if local files are modified, deleted, or malformed. Referenced commits must exist locally: fetch missing refs/history in shallow checkouts. Three-dot requires a common ancestor; two-dot can compare unrelated histories.
 
+Working-tree mode rejects unmerged index entries, even if you have edited away conflict markers but have not staged the resolution. Committed ranges remain available during an unresolved local merge because they do not inspect the index or disk contents. Avoid editing files during working-tree analysis; committed comparisons are the reproducible option for CI.
+
 References are verified as commits and pinned to hashes before analysis. Git is invoked without a shell, and untrusted references use [`rev-parse --verify --end-of-options`](https://git-scm.com/docs/git-rev-parse) before they can reach a diff command. Missing references, invalid ranges, and absent common ancestors produce concise errors with exit code `2`, without raw Git output or stack traces.
 
 The report includes changed-file and finding counts, then groups findings by HIGH, MEDIUM, and LOW severity. Each finding lists the relevant files. Suggested checks are deduplicated. Paths are quoted and escaped so tabs and newlines cannot break the report. File contents and raw diffs are not printed.
@@ -145,7 +167,7 @@ The JSON document contains:
 
 No raw patches, source snapshots, dependency specifiers, secret values, or absolute repository path are serialized. There are no timestamps or progress messages in JSON output. This makes it suitable for saving as a CI artifact or consuming from a script.
 
-A HIGH finding still writes the complete report, then exits `1`. A usage, Git, or detector error exits `2`, leaves stdout empty, and writes a concise diagnostic to stderr. An empty redirected file after an error is not a clean report. Check the process status before parsing it. Help/version are informational commands, not JSON analysis responses.
+A HIGH finding still writes the complete report, then exits `1`. A usage, Git, or detector error exits `2`, leaves stdout empty, and writes a concise diagnostic to stderr. Output-write failures also exit `2`, but a destination may already contain partial bytes; discard that output. An empty or incomplete redirected file after an error is not a clean report. Check the process status before parsing it. Help/version are informational commands, not JSON analysis responses.
 
 ## GitHub Actions
 
@@ -185,7 +207,8 @@ CLI -> Git adapter -> ChangeContext -> Detectors -> Findings -> Text/JSON report
 ```
 
 - `src/cli.ts` coordinates analysis, writes the completed report, and selects an exit code.
-- `src/git/gitAdapter.ts` runs Git through Node's `execFile`, passing arguments without a shell. An optional content filter loads before-and-after versions only for selected changed paths; renamed files preserve their original path. Working-tree mode reads disk for the after side; ranges read both sides from commits.
+- `src/cli/writeOutput.ts` waits for report writes and handles asynchronous stream failures without ending stdout or exposing stack traces.
+- `src/git/gitAdapter.ts` runs Git through Node's `execFile`, passing arguments without a shell. An optional content filter loads before-and-after versions only for selected changed paths; renamed files preserve their original path. Working-tree mode reads disk for the after side; ranges read both sides from commits. The CLI passes `includeDiff: false` because the MVP detectors use metadata and selected snapshots, not raw patches; library callers retain patches by default.
 - `src/git/resolveComparison.ts` validates input, resolves commit hashes, and selects the merge base for three-dot comparisons. `ChangeContext.comparison` records the selected mode, labels, and commit endpoints.
 - `src/git/parseNameStatus.ts` parses null-delimited file statuses, preserving unusual filenames and rename paths.
 - `src/core/types.ts` defines the change context, severity, structured findings, and detector interface.
@@ -229,17 +252,35 @@ Duplicate findings have the same detector, severity, title, description, file se
 npm run typecheck
 npm test
 npm run build
+node --check scripts/demo.mjs
+git diff --check
 ```
 
 Tests cover Git parsing, real temporary Git repositories and divergent histories, all five detector categories, duplicate handling, report formatting/colors, and complete CLI analysis with exit codes. Comparison tests include dirty working trees, historical tags, missing refs, unrelated histories, renames, and secret exclusions.
 
 CI tests cover JSON/text exit-code parity, complete reports on HIGH findings, no partial output on errors, automatic color suppression, and shallow clones before and after fetching missing history.
 
+Strict TypeScript checks also reject unused locals/parameters and accidental switch fallthrough. No separate lint dependency is required for these checks. Regression tests cover secret renames, unresolved index entries, unusual migration filenames, asynchronous write failures, and skipping large unrelated patches. Git command output and selected contents are bounded to 20 MiB; individual Git commands time out after 30 seconds. The CLI avoids generating raw patches, but large selected source/manifests still produce a tool error rather than an incomplete report.
+
+The full suite and compiled demo have been verified on Windows with Node.js 22.12.0 and 24.13.1. The Actions YAML is validated locally; it remains a usage example, not an automatically enabled hosted workflow.
+
+## Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| A new file is missing from local analysis | Stage it with `git add`; untracked files are excluded. |
+| Cannot resolve a reference / no common ancestor | Fetch the required refs and history, especially in a shallow checkout. |
+| Unresolved merge conflicts | Resolve and stage all conflicted files, or analyze committed endpoints. |
+| A private environment file was renamed into source | Review the rename manually; ChangeRadar deliberately refuses to load those contents. |
+| Source or manifest parsing fails | Fix malformed syntax/JSON or review unsupported syntax; analysis is not treated as successful. |
+| A selected file or Git result exceeds the content limit | Narrow the committed comparison or reduce the selected file size; omitted analysis is not reported as clean. |
+| Unable to write the report | Check the consuming pipe, destination permissions, and disk space; discard any partial report. |
+
 ## Exit Codes
 
 - `0`: analysis completed with no HIGH findings (MEDIUM/LOW findings are non-blocking), or help/version displayed.
 - `1`: analysis completed with at least one HIGH finding; the full report is still available.
-- `2`: CLI usage or tool execution error; no analysis report is produced, even if an earlier detector found HIGH impacts.
+- `2`: CLI usage or tool execution error; no completed analysis report is produced, even if an earlier detector found HIGH impacts. Output-write failures may leave partial bytes, which must be discarded.
 
 This policy is identical in text and JSON modes, locally and in CI. Exit `0` does not guarantee a safe deployment; it only means no HIGH impacts were detected by the enabled rules. For a non-blocking review workflow, handle exit `1` explicitly while continuing to fail on exit `2`; do not swallow every non-zero result.
 

@@ -145,4 +145,58 @@ describe("getChanges with a real repository", () => {
       path: "renamed.txt", previousPath: "existing.ts", before: "export const value = 1;\n", after: "",
     }]);
   });
+
+  it("can skip raw patches without losing changed-file metadata or selected snapshots", async () => {
+    writeFileSync(join(directory, "existing.ts"), "process.env.CURRENT;\n");
+    const context = await getChanges(directory, { includeDiff: false, includeContent: (path) => path.endsWith(".ts") });
+    expect(context.diff).toBe("");
+    expect(context.files).toEqual([{ status: "modified", path: "existing.ts" }]);
+    expect(context.fileContents).toEqual([{ path: "existing.ts", before: "export const value = 1;\n", after: "process.env.CURRENT;\n" }]);
+  });
+
+  it.each([
+    { from: ".env.local", to: "config.txt" },
+    { from: "config.txt", to: ".env.production" },
+    { from: ".env", to: ".env.example" },
+  ])("excludes both sides of private-file rename $from -> $to from raw patches", async ({ from, to }) => {
+    writeFileSync(join(directory, from), "API_KEY=never-load-this-value\n");
+    git("add", "--force", from);
+    git("commit", "--quiet", "-m", "Rename fixture");
+    git("mv", from, to);
+    const context = await getChanges(directory);
+    expect(context.files).toEqual([{ status: "renamed", previousPath: from, path: to }]);
+    expect(context.diff).toBe("");
+    git("commit", "--quiet", "-m", "Rename file");
+    const committed = await getChanges(directory, { comparison: "HEAD~1..HEAD" });
+    expect(committed.files).toEqual(context.files);
+    expect(committed.diff).toBe("");
+  });
+
+  it.each(["config.ts", ".env.example", "package.json"])(
+    "fails clearly instead of reading private-file contents renamed to %s", async (path) => {
+      writeFileSync(join(directory, ".env.local"), "API_KEY=never-load-this-value\n");
+      git("add", "--force", ".env.local");
+      git("commit", "--quiet", "-m", "Private fixture");
+      git("mv", ".env.local", path);
+      await expect(getChanges(directory, { includeDiff: false, includeContent: () => true }))
+        .rejects.toMatchObject({ code: "SECRET_FILE_RENAME", message: expect.not.stringContaining("never-load-this-value") });
+      git("commit", "--quiet", "-m", "Private rename");
+      await expect(getChanges(directory, { comparison: "HEAD~1..HEAD", includeContent: () => true }))
+        .rejects.toMatchObject({ code: "SECRET_FILE_RENAME" });
+    },
+  );
+
+  it.each([".env.local\nbackup", ".env.example\n"])("excludes private filename %j in committed trees", async (path) => {
+    git("config", "core.protectNTFS", "false");
+    const blob = execFileSync("git", ["hash-object", "-w", "--stdin"], {
+      cwd: directory, encoding: "utf8", windowsHide: true, input: "API_KEY=never-load-this-value\n",
+    }).trim();
+    // Build the tree entry directly: this is a valid Git path but cannot be checked out on Windows.
+    git("update-index", "--add", "--cacheinfo", `100644,${blob},${path}`);
+    git("commit", "--quiet", "-m", "Unusual private-file fixture");
+    const context = await getChanges(directory, { comparison: "HEAD~1..HEAD", includeContent: () => true });
+    expect(context.files).toEqual([{ status: "added", path }]);
+    expect(context.diff).toBe("");
+    expect(context.fileContents).toEqual([]);
+  });
 });

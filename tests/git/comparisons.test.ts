@@ -150,4 +150,22 @@ describe("Git comparisons with real history", () => {
     execFileSync("git", ["init", "--quiet", "--bare", bare], { windowsHide: true, stdio: "pipe" });
     await expect(getChanges(bare)).rejects.toMatchObject({ code: "NOT_A_REPOSITORY", message: expect.stringContaining("working tree") });
   });
+
+  it("rejects unresolved index conflicts in working-tree mode but allows committed comparisons", async () => {
+    git("checkout", "--quiet", "-b", "feature");
+    writeFileSync(join(directory, "config.ts"), "process.env.FEATURE;\n");
+    commit("Feature edit");
+    git("checkout", "--quiet", "main");
+    writeFileSync(join(directory, "config.ts"), "process.env.MAIN;\n");
+    commit("Main edit");
+    expect(() => git("merge", "--no-edit", "feature")).toThrow();
+    // A resolved-looking file still has unmerged index entries until it is staged.
+    writeFileSync(join(directory, "config.ts"), "process.env.RESOLVED;\n");
+    await expect(getChanges(directory, { includeDiff: false })).rejects.toMatchObject({ code: "UNMERGED_CHANGES" });
+    await expect(getChanges(directory, { comparison: "base", includeDiff: false })).rejects.toMatchObject({ code: "UNMERGED_CHANGES" });
+    const committed = await getChanges(directory, { comparison: "main...feature", includeContent: () => true });
+    expect(committed.fileContents).toEqual([{ path: "config.ts", before: initialSource, after: "process.env.FEATURE;\n" }]);
+    git("add", "config.ts");
+    expect((await getChanges(directory)).files).toEqual([{ status: "modified", path: "config.ts" }]);
+  });
 });

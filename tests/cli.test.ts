@@ -57,6 +57,25 @@ describe("CLI", () => {
     expect(result.stdout.trim()).toBe("0.1.0");
   });
 
+  it("reports asynchronous output failures with exit code 2 and no stack trace", () => {
+    initializeRepository();
+    const bootstrap = `import { Writable } from 'node:stream';
+      const output = new Writable({ write(chunk, encoding, callback) {
+        callback(Object.assign(new Error('private-output-detail'), { code: 'EPIPE' }));
+      }});
+      Object.defineProperty(process, 'stdout', { value: output });
+      process.argv = ${JSON.stringify([process.execPath, cliPath, "analyze", "--format", "json"])};
+      await import(${JSON.stringify(pathToFileURL(cliPath).href)});`;
+    const result = spawnSync(process.execPath, ["--import", loader, "--input-type=module", "-e", bootstrap], {
+      cwd: directory, encoding: "utf8", windowsHide: true, timeout: 10_000,
+    });
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("Unable to write the report");
+    expect(result.stderr).not.toContain("private-output-detail");
+    expect(result.stderr).not.toContain("at writeOutput");
+  });
+
   it("rejects excess comparison arguments with exit code 2", () => {
     const result = run(["analyze", "HEAD", "extra"]);
     expect(result.status).toBe(2);

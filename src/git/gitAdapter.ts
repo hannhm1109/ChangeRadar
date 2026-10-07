@@ -11,11 +11,13 @@ const execFileAsync = promisify(execFile);
 
 export interface GitChangeOptions {
   comparison?: string;
+  includeDiff?: boolean;
   includeContent?: (path: string) => boolean;
 }
 
 function isSecretEnvironmentFile(path: string): boolean {
-  return /(?:^|\/)\.env(?:\..*)?$/.test(path) && !/(?:^|\/)\.env\.example$/.test(path);
+  const isTemplate = path === ".env.example" || path.endsWith("/.env.example");
+  return /(?:^|\/)\.env(?:\..*)?$/s.test(path) && !isTemplate;
 }
 
 async function readWorkingFile(repositoryRoot: string, path: string): Promise<string> {
@@ -48,6 +50,10 @@ async function readContentChange(
   comparison: ChangeComparison,
 ): Promise<FileContentChange> {
   const previousPath = file.status === "renamed" ? file.previousPath : file.path;
+  if (file.status === "renamed" && isSecretEnvironmentFile(previousPath) && includeContent(file.path)) {
+    throw new ChangeRadarError("SECRET_FILE_RENAME",
+      `Cannot inspect ${JSON.stringify(file.path)} because it was renamed from a private environment file. Review the rename manually; secret contents are not loaded.`);
+  }
   const before = file.status !== "added" && includeContent(previousPath)
     ? await readCommittedFile(repositoryRoot, previousPath, comparison.baseCommit)
     : "";
@@ -115,6 +121,10 @@ export async function getChanges(cwd = process.cwd(), options: GitChangeOptions 
 
   const comparison = await resolveComparison(options.comparison,
     (args) => runGit(args, repositoryRoot));
+  if (comparison.mode === "working-tree" && await runGit(["ls-files", "--unmerged", "-z"], repositoryRoot)) {
+    throw new ChangeRadarError("UNMERGED_CHANGES",
+      "Unresolved Git merge conflicts. Resolve and stage conflicted files before analyzing working-tree changes, or use a committed range.");
+  }
   const revisions = comparison.mode === "working-tree"
     ? [comparison.baseCommit] : [comparison.baseCommit, comparison.targetCommit];
 
@@ -124,9 +134,12 @@ export async function getChanges(cwd = process.cwd(), options: GitChangeOptions 
     repositoryRoot,
   );
   const files = parseNameStatus(nameStatus);
-  const secretPaths = new Set(files.flatMap((file) => file.status === "renamed"
-    ? [file.previousPath, file.path] : [file.path]).filter(isSecretEnvironmentFile));
-  const diff = files.length === 0 ? "" : await runGit(
+  // Exclude both sides of secret renames: Git can otherwise expose the contents as an addition/deletion.
+  const secretPaths = new Set(files.flatMap((file) => {
+    const paths = file.status === "renamed" ? [file.previousPath, file.path] : [file.path];
+    return paths.some(isSecretEnvironmentFile) ? paths : [];
+  }));
+  const diff = files.length === 0 || options.includeDiff === false ? "" : await runGit(
     ["diff", ...diffOptions, "--no-color", "--unified=0", ...revisions, "--", ".",
       ...[...secretPaths].map((path) => `:(exclude,literal)${path}`)],
     repositoryRoot,

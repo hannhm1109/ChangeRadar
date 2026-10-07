@@ -140,4 +140,44 @@ describe("CI analysis", () => {
     expect(complete.status).toBe(1);
     expect((JSON.parse(complete.stdout) as JsonReport).summary).toMatchObject({ findingCount: 1, exitCode: 1 });
   });
+
+  it("reports unresolved conflicts as errors, including resolved-but-not-staged files", () => {
+    git("checkout", "--quiet", "-b", "feature");
+    writeFileSync(join(directory, "README.md"), "Feature\n");
+    commit("Feature");
+    git("checkout", "--quiet", "main");
+    writeFileSync(join(directory, "README.md"), "Main\n");
+    commit("Main");
+    expect(() => git("merge", "--no-edit", "feature")).toThrow();
+    writeFileSync(join(directory, "README.md"), "Resolved locally\n");
+    const result = run(["analyze", "--format", "json"]);
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("Resolve and stage conflicted files");
+    const committed = run(["analyze", "main...feature", "--format", "json"]);
+    expect(committed.status).toBe(0);
+    expect((JSON.parse(committed.stdout) as JsonReport).summary.changedFileCount).toBe(1);
+  });
+
+  it("fails a private environment-file rename into source without loading or reporting values", () => {
+    writeFileSync(join(directory, ".env.local"), "API_KEY=never-load-this-private-value\n");
+    commit("Private fixture");
+    git("mv", ".env.local", "config.ts");
+    const result = run(["analyze", "--format", "json"]);
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("renamed from a private environment file");
+    expect(result.stderr).not.toContain("never-load-this-private-value");
+  });
+
+  it("ignores huge unrelated text patches while keeping relevant findings", () => {
+    writeFileSync(join(directory, "large.txt"), "x".repeat(21 * 1024 * 1024));
+    writeFileSync(join(directory, "config.ts"), "process.env.API_KEY;\n");
+    git("add", "large.txt", "config.ts");
+    const result = run(["analyze", "--format", "json"]);
+    expect(result.status).toBe(0);
+    const report = JSON.parse(result.stdout) as JsonReport;
+    expect(report.summary).toMatchObject({ changedFileCount: 2, findingCount: 1 });
+    expect(result.stdout.length).toBeLessThan(10_000);
+  });
 });

@@ -11,6 +11,7 @@ import { dependencyDetector, isDependencyManifest } from "./detectors/dependency
 import { cronConfigDetector } from "./detectors/cronConfigDetector.js";
 import { formatTerminalReport } from "./reporters/terminalReporter.js";
 import { formatJsonReport } from "./reporters/jsonReporter.js";
+import { writeOutput } from "./cli/writeOutput.js";
 
 const { version } = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
@@ -48,6 +49,7 @@ program.command("analyze", { isDefault: true })
     const { environmentDetector, isEnvironmentSource } = await import("./detectors/environmentDetector.js");
     const context = await getChanges(process.cwd(), {
       ...(comparison === undefined ? {} : { comparison }),
+      includeDiff: false,
       includeContent: (path) => isEnvironmentSource(path) || isDependencyManifest(path),
     });
     const findings = runDetectors(context, [
@@ -57,7 +59,7 @@ program.command("analyze", { isDefault: true })
     const color = Boolean(process.stdout.isTTY) && options.color && !process.env.CI
       && process.env.NO_COLOR === undefined && process.env.NODE_DISABLE_COLORS === undefined
       && process.env.TERM !== "dumb";
-    process.stdout.write(options.format === "json"
+    await writeOutput(options.format === "json"
       ? formatJsonReport(context, findings) : formatTerminalReport(context, findings, { color }));
     process.exitCode = getAnalysisExitCode(findings);
   });

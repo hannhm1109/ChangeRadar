@@ -43,6 +43,10 @@ export function parseNameStatus(output: string): ChangedFile[] {
       case "D":
         files.push({ status: "deleted", path: nextField() });
         break;
+      case "U":
+        nextField();
+        throw new ChangeRadarError("UNMERGED_CHANGES",
+          "Unresolved Git merge conflicts. Resolve and stage conflicted files before analyzing working-tree changes, or use a committed range.");
       default:
         invalidOutput();
     }

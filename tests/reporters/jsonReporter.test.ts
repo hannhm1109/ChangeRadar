@@ -56,6 +56,7 @@ describe("formatJsonReport", () => {
       ...context, diff: "raw-patch-private-value",
       fileContents: [{ path: "config.ts", before: "source-before-private-value", after: "source-after-private-value" }],
       files: [{ status: "modified", path: "config.ts", rawContents: "file-private-value" } as const],
+      comparison: { mode: "working-tree" as const, baseRef: "HEAD", baseCommit: "base", rawContents: "comparison-private-value" },
     };
     const findings = [{ detector: "test", severity: "LOW" as const, title: "Impact", files: ["config.ts"], rawContents: "finding-private-value" }];
     const output = formatJsonReport(input, findings);

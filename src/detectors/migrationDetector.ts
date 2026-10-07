@@ -2,7 +2,7 @@ import type { Detector, Finding } from "../core/types.js";
 
 function isMigration(path: string): boolean {
   if (/^prisma\/migrations\/[^/]+\/migration\.sql$/.test(path)) return true;
-  return /^(?:database\/)?migrations\/.+\.(?:sql|[cm]?[jt]s|py|rb|php)$/.test(path)
+  return /^(?:database\/)?migrations\/.+\.(?:sql|[cm]?[jt]s|py|rb|php)$/s.test(path)
     && !/\.(?:d|test|spec)\.(?:sql|[cm]?[jt]s|py|rb|php)$/.test(path);
 }
 

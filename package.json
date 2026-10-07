@@ -18,6 +18,7 @@
   },
   "scripts": {
     "dev": "tsx src/cli.ts",
+    "demo": "node scripts/demo.mjs",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --dir tests",
