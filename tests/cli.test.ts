@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
@@ -52,15 +52,121 @@ describe("CLI", () => {
   });
 
   it("displays the package version", () => {
-    const result = run(["--version"]);
+    const result = run(["--version"], { ...process.env, PATH: "" });
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe("0.1.0");
   });
 
-  it("rejects unsupported reference input with exit code 2", () => {
-    const result = run(["analyze", "HEAD~1"]);
+  it("rejects excess comparison arguments with exit code 2", () => {
+    const result = run(["analyze", "HEAD", "extra"]);
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("too many arguments");
+  });
+
+  it("documents comparisons and exit codes without needing Git", () => {
+    const result = run(["analyze", "--help"], { ...process.env, PATH: "" });
+    expect(result.status).toBe(0);
+    for (const text of ["HEAD~1", "v1.0..HEAD", "main...HEAD", "both endpoints", "Exit codes", "--no-color"]) {
+      expect(result.stdout).toContain(text);
+    }
+    expect(result.stderr).toBe("");
+  });
+
+  it("analyzes with no command and disables colors even when FORCE_COLOR is present", () => {
+    initializeRepository();
+    mkdirSync(join(directory, "migrations"));
+    writeFileSync(join(directory, "migrations", "001.sql"), "CREATE TABLE orders (id INT);\n");
+    git("add", ".");
+    const env = Object.fromEntries(Object.entries(process.env)
+      .filter(([key]) => key !== "NO_COLOR" && key !== "NODE_DISABLE_COLORS"));
+    const result = run(["--no-color"], { ...env, FORCE_COLOR: "1" });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("Database migration added");
+    expect(result.stdout).not.toContain("\u001b[");
+    expect(result.stderr).toBe("");
+  });
+
+  it("supports a reference plus unstaged changes and NO_COLOR", () => {
+    initializeRepository();
+    writeFileSync(join(directory, "config.ts"), "process.env.COMMITTED;\n");
+    git("add", ".");
+    git("commit", "--quiet", "-m", "Committed environment reference");
+    writeFileSync(join(directory, "config.ts"), "process.env.COMMITTED; process.env.LOCAL;\n");
+    const result = run(["analyze", "HEAD~1"], { ...process.env, NO_COLOR: "1" });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("1 file changed against HEAD~1");
+    expect(result.stdout).toContain("New environment variable detected: COMMITTED");
+    expect(result.stdout).toContain("New environment variable detected: LOCAL");
+    expect(result.stdout).not.toContain("\u001b[");
+  });
+
+  it.each([
+    { options: [], variables: {}, colored: true },
+    { options: ["--no-color"], variables: {}, colored: false },
+    { options: [], variables: { NO_COLOR: "1" }, colored: false },
+    { options: [], variables: { NODE_DISABLE_COLORS: "1" }, colored: false },
+    { options: [], variables: { TERM: "dumb" }, colored: false },
+  ])("applies interactive color policy: %j", ({ options, variables, colored }) => {
+    initializeRepository();
+    writeFileSync(join(directory, "vercel.json"), "{}\n");
+    git("add", ".");
+    const env = Object.fromEntries(Object.entries(process.env)
+      .filter(([key]) => !["NO_COLOR", "NODE_DISABLE_COLORS", "FORCE_COLOR", "TERM"].includes(key)));
+    // Simulate the stream's TTY capability while capturing the actual CLI output.
+    const bootstrap = `process.stdout.isTTY = true;
+      process.argv = ${JSON.stringify([process.execPath, cliPath, "analyze", ...options])};
+      await import(${JSON.stringify(pathToFileURL(cliPath).href)});`;
+    const result = spawnSync(process.execPath, ["--import", loader, "--input-type=module", "-e", bootstrap], {
+      cwd: directory, encoding: "utf8", windowsHide: true, timeout: 10_000, env: { ...env, ...variables },
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Deployment configuration added");
+    expect(result.stdout.includes("\u001b[")).toBe(colored);
+    expect(result.stderr).toBe("");
+  });
+
+  it.each(["HEAD~1..HEAD", "HEAD~1...HEAD"])("runs every detector against %s and ignores malformed local contents", (comparison) => {
+    initializeRepository();
+    mkdirSync(join(directory, "migrations"));
+    mkdirSync(join(directory, "pages", "api"), { recursive: true });
+    writeFileSync(join(directory, "migrations", "001.sql"), "CREATE TABLE orders (id INT);\n");
+    writeFileSync(join(directory, "pages", "api", "orders.ts"), "export const key = process.env.COMMITTED;\n");
+    writeFileSync(join(directory, "package.json"), '{"dependencies":{"stripe":"1"}}\n');
+    writeFileSync(join(directory, "vercel.json"), "{}\n");
+    git("add", ".");
+    git("commit", "--quiet", "-m", "All deployment impacts");
+    writeFileSync(join(directory, "pages", "api", "orders.ts"), "const broken =");
+    writeFileSync(join(directory, "package.json"), "{broken");
+    const result = run(["analyze", comparison, "--no-color"]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("5 deployment impacts detected");
+    expect(result.stdout).toContain("(committed)");
+    for (const text of ["Database migration added", "New environment variable detected: COMMITTED",
+      "API route added: /api/orders", "Added dependency: stripe", "Deployment configuration added"]) {
+      expect(result.stdout).toContain(text);
+    }
+    expect(result.stderr).toBe("");
+  });
+
+  it.each(["missing-branch", "HEAD~99"])("reports invalid reference %s without a partial report or stack", (reference) => {
+    initializeRepository();
+    const result = run(["analyze", reference]);
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(`Cannot resolve "${reference}" to a commit`);
+    expect(result.stderr).toContain("fetch missing history");
+    expect(result.stderr).not.toContain("at resolveCommit");
+    expect(result.stderr).not.toContain("fatal:");
+  });
+
+  it("reports malformed ranges and unknown options as usage errors", () => {
+    initializeRepository();
+    const malformed = run(["analyze", "HEAD..."]);
+    expect(malformed.status).toBe(2);
+    expect(malformed.stderr).toContain("both endpoints specified");
+    const unknown = run(["analyze", "--unknown-option"]);
+    expect(unknown.status).toBe(2);
+    expect(unknown.stderr).toContain("unknown option");
   });
 
   it("reports a repository error without a stack trace", () => {
@@ -86,6 +192,9 @@ describe("CLI", () => {
     expect(result.stdout).toContain("0 files changed against HEAD");
     expect(result.stdout).toContain("No changed files to analyze.");
     expect(result.stderr).toBe("");
+    const defaultResult = run([]);
+    expect(defaultResult.status).toBe(0);
+    expect(defaultResult.stdout).toBe(result.stdout);
   });
 
   it("reports unrelated edits without findings or raw file contents", () => {

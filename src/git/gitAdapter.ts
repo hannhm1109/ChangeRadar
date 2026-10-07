@@ -2,13 +2,15 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { lstat, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { ChangeContext, ChangedFile, FileContentChange } from "../core/types.js";
+import type { ChangeComparison, ChangeContext, ChangedFile, FileContentChange } from "../core/types.js";
 import { ChangeRadarError } from "../errors/ChangeRadarError.js";
 import { parseNameStatus } from "./parseNameStatus.js";
+import { resolveComparison } from "./resolveComparison.js";
 
 const execFileAsync = promisify(execFile);
 
 export interface GitChangeOptions {
+  comparison?: string;
   includeContent?: (path: string) => boolean;
 }
 
@@ -33,23 +35,26 @@ async function readWorkingFile(repositoryRoot: string, path: string): Promise<st
   }
 }
 
-async function readCommittedFile(repositoryRoot: string, path: string): Promise<string> {
-  const entry = await runGit(["ls-tree", "-z", "HEAD", "--", path], repositoryRoot);
+async function readCommittedFile(repositoryRoot: string, path: string, commit: string): Promise<string> {
+  const entry = await runGit(["ls-tree", "-z", commit, "--", `:(literal)${path}`], repositoryRoot);
   if (!entry.startsWith("100")) return "";
-  return runGit(["show", `HEAD:${path}`], repositoryRoot);
+  return runGit(["show", `${commit}:${path}`], repositoryRoot);
 }
 
 async function readContentChange(
   repositoryRoot: string,
   file: ChangedFile,
   includeContent: (path: string) => boolean,
+  comparison: ChangeComparison,
 ): Promise<FileContentChange> {
   const previousPath = file.status === "renamed" ? file.previousPath : file.path;
   const before = file.status !== "added" && includeContent(previousPath)
-    ? await readCommittedFile(repositoryRoot, previousPath)
+    ? await readCommittedFile(repositoryRoot, previousPath, comparison.baseCommit)
     : "";
   const after = file.status !== "deleted" && includeContent(file.path)
-    ? await readWorkingFile(repositoryRoot, file.path)
+    ? comparison.mode === "working-tree"
+      ? await readWorkingFile(repositoryRoot, file.path)
+      : await readCommittedFile(repositoryRoot, file.path, comparison.targetCommit)
     : "";
   return file.status === "renamed"
     ? { path: file.path, previousPath, before, after }
@@ -90,14 +95,15 @@ function gitStderr(error: unknown): string {
   return typeof cause?.stderr === "string" ? cause.stderr : "";
 }
 
-/** Reads the net staged and unstaged changes to tracked files against HEAD. */
+/** Reads working-tree changes against a ref, or committed changes between range endpoints. */
 export async function getChanges(cwd = process.cwd(), options: GitChangeOptions = {}): Promise<ChangeContext> {
   let repositoryRoot: string;
   try {
     repositoryRoot = (await runGit(["rev-parse", "--show-toplevel"], cwd))
       .replace(/\r?\n$/, "");
   } catch (cause) {
-    if (gitStderr(cause).includes("not a git repository")) {
+    if (gitStderr(cause).includes("not a git repository")
+      || gitStderr(cause).includes("must be run in a work tree")) {
       throw new ChangeRadarError(
         "NOT_A_REPOSITORY",
         "Not a Git repository. Run ChangeRadar inside a Git working tree.",
@@ -107,34 +113,26 @@ export async function getChanges(cwd = process.cwd(), options: GitChangeOptions 
     throw cause;
   }
 
-  try {
-    await runGit(["rev-parse", "--verify", "HEAD"], repositoryRoot);
-  } catch (cause) {
-    if (gitStderr(cause).includes("Needed a single revision")) {
-      throw new ChangeRadarError(
-        "NO_COMMITS",
-        "This repository has no commits yet. Create an initial commit before analyzing changes.",
-        { cause },
-      );
-    }
-    throw cause;
-  }
+  const comparison = await resolveComparison(options.comparison,
+    (args) => runGit(args, repositoryRoot));
+  const revisions = comparison.mode === "working-tree"
+    ? [comparison.baseCommit] : [comparison.baseCommit, comparison.targetCommit];
 
-  const diffOptions = ["--no-ext-diff", "--no-textconv", "--find-renames", "--ignore-submodules=none"];
+  const diffOptions = ["--no-ext-diff", "--no-textconv", "--find-renames", "--no-relative", "--ignore-submodules=none"];
   const nameStatus = await runGit(
-    ["diff", ...diffOptions, "--name-status", "-z", "HEAD", "--"],
+    ["diff", ...diffOptions, "--name-status", "-z", ...revisions, "--"],
     repositoryRoot,
   );
   const files = parseNameStatus(nameStatus);
   const secretPaths = new Set(files.flatMap((file) => file.status === "renamed"
     ? [file.previousPath, file.path] : [file.path]).filter(isSecretEnvironmentFile));
   const diff = files.length === 0 ? "" : await runGit(
-    ["diff", ...diffOptions, "--no-color", "--unified=0", "HEAD", "--", ".",
+    ["diff", ...diffOptions, "--no-color", "--unified=0", ...revisions, "--", ".",
       ...[...secretPaths].map((path) => `:(exclude,literal)${path}`)],
     repositoryRoot,
   );
 
-  const context: ChangeContext = { repositoryRoot, files, diff };
+  const context: ChangeContext = { repositoryRoot, files, diff, comparison };
   const contentFilter = options.includeContent;
   if (contentFilter) {
     const includeContent = (path: string) => !isSecretEnvironmentFile(path) && contentFilter(path);
@@ -142,7 +140,7 @@ export async function getChanges(cwd = process.cwd(), options: GitChangeOptions 
     for (const file of files) {
       if (includeContent(file.path)
         || (file.status === "renamed" && includeContent(file.previousPath))) {
-        context.fileContents.push(await readContentChange(repositoryRoot, file, includeContent));
+        context.fileContents.push(await readContentChange(repositoryRoot, file, includeContent, comparison));
       }
     }
   }

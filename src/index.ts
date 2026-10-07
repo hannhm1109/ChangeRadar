@@ -1,4 +1,4 @@
-export type { ChangeContext, ChangedFile, ChangeStatus, Detector, Finding, FileContentChange, Severity } from "./core/types.js";
+export type { ChangeComparison, ChangeContext, ChangedFile, ChangeStatus, Detector, Finding, FileContentChange, Severity } from "./core/types.js";
 export { ChangeRadarError } from "./errors/ChangeRadarError.js";
 export type { ChangeRadarErrorCode } from "./errors/ChangeRadarError.js";
 export { getChanges } from "./git/gitAdapter.js";
@@ -10,3 +10,4 @@ export { dependencyDetector, isDependencyManifest } from "./detectors/dependency
 export { cronConfigDetector } from "./detectors/cronConfigDetector.js";
 export { environmentDetector, isEnvironmentSource } from "./detectors/environmentDetector.js";
 export { formatTerminalReport } from "./reporters/terminalReporter.js";
+export type { TerminalReportOptions } from "./reporters/terminalReporter.js";

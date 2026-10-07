@@ -46,4 +46,26 @@ describe("formatTerminalReport", () => {
     expect(report).not.toContain("\nMEDIUM\n");
     expect(report.endsWith("\n")).toBe(true);
   });
+
+  it("labels working-tree, endpoint, and merge-base comparisons distinctly", () => {
+    const working = { mode: "working-tree", baseRef: "HEAD~1", baseCommit: "base" } as const;
+    expect(formatTerminalReport({ ...context, comparison: working }, [])).toContain("changed against HEAD~1");
+    const committed = { baseRef: "main", targetRef: "feature", baseCommit: "base", targetCommit: "target" };
+    expect(formatTerminalReport({ ...context, comparison: { ...committed, mode: "two-dot" } }, []))
+      .toContain("changed between main and feature (committed)");
+    expect(formatTerminalReport({ ...context, comparison: { ...committed, mode: "three-dot" } }, []))
+      .toContain("changed from merge base of main and feature to feature (committed)");
+  });
+
+  it("adds optional severity colors without changing content or default plain output", () => {
+    const findings: Finding[] = ["HIGH", "MEDIUM", "LOW"].map((severity) => ({
+      detector: "test", severity: severity as Finding["severity"], title: "Change detected", files: ["test.ts"],
+    }));
+    const plain = formatTerminalReport(context, findings);
+    const colored = formatTerminalReport(context, findings, { color: true });
+    expect(plain).not.toContain("\u001b[");
+    expect(colored).toContain("\u001b[");
+    expect(colored.replace(/\u001b\[[0-9;]*m/g, "")).toBe(plain);
+    expect(formatTerminalReport(context, findings, { color: false })).toBe(plain);
+  });
 });

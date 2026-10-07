@@ -4,13 +4,13 @@ ChangeRadar analyzes Git changes to highlight modifications that may affect depl
 
 ## Current Status
 
-Phase 5 is complete: all five MVP detector categories run through the shared engine and terminal reporter: environment variables, migrations, Next.js API routes, dependencies, and cron/config files.
+Phase 6 is complete: all five MVP detector categories run through the shared engine and terminal reporter, with polished CLI help, default analysis, terminal colors, and Git reference/range comparisons.
 
-Migration findings have HIGH severity; environment, API-route, and cron/config findings have MEDIUM severity; dependency findings have LOW severity. A report with no findings does not establish that a deployment is safe. CLI polish and reference/range support come in the next phase.
+Migration findings have HIGH severity; environment, API-route, and cron/config findings have MEDIUM severity; dependency findings have LOW severity. A report with no findings does not establish that a deployment is safe. Dedicated CI integration is the next phase.
 
 ## Supported Detectors
 
-Environment detection compares variable names in the committed and working-tree versions of changed JS/TS files and `.env.example` templates. It supports `process.env.NAME`, static `process.env["NAME"]` access, and optional chaining, including JSX/TSX and CommonJS/ES module extensions. One finding per new name lists all matching changed files. Comments, string examples, formatting edits, removed names, value-only template edits, and names moved between changed files do not produce findings.
+Environment detection compares variable names in the before-and-after versions of changed JS/TS files and `.env.example` templates. It supports `process.env.NAME`, static `process.env["NAME"]` access, and optional chaining, including JSX/TSX and CommonJS/ES module extensions. One finding per new name lists all matching changed files. Comments, string examples, formatting edits, removed names, value-only template edits, and names moved between changed files do not produce findings.
 
 Only template keys and code references are reported. Actual `.env`, `.env.local`, and other `.env.*` files are excluded from content snapshots and raw patches, except `.env.example`. Source-file symlinks are not followed. No values or raw source are printed.
 
@@ -53,7 +53,11 @@ Requires Node.js 22.12 or newer (an LTS release is recommended), npm, and Git on
 
 ```bash
 npm install
+npm run dev
 npm run dev -- analyze
+npm run dev -- analyze HEAD~1
+npm run dev -- analyze main...HEAD
+npm run dev -- analyze --help
 npm run dev -- --help
 npm run dev -- --version
 ```
@@ -63,15 +67,29 @@ To run the compiled CLI:
 ```bash
 npm run build
 node dist/cli.js analyze
+node dist/cli.js analyze HEAD~1..HEAD
 ```
 
-## Diff Mode
+## Comparisons
 
-`analyze` compares the current working tree against `HEAD`. This includes the net staged and unstaged changes across the entire repository, even when invoked from a subdirectory.
+Running `changeradar` without a command is equivalent to `changeradar analyze`. It compares the current working tree against `HEAD`, including net staged and unstaged changes across the entire repository, even when invoked from a subdirectory.
 
-New untracked files are excluded. Run `git add <file>` to include a new file. A repository must have an initial commit. Git references and ranges will be added in a later phase.
+| Input | Before | After | Includes local edits? |
+| --- | --- | --- | --- |
+| `analyze` | `HEAD` | Working tree | Yes |
+| `analyze HEAD~1` | Previous commit | Working tree | Yes |
+| `analyze v1.0..HEAD` | Commit at `v1.0` | Commit at `HEAD` | No |
+| `analyze main...HEAD` | Common ancestor of `main` and `HEAD` | Commit at `HEAD` | No |
+
+A single reference can be a branch, tag, commit hash, or a revision such as `HEAD~1`. Two-dot compares committed endpoints; three-dot compares the merge base to the right endpoint, following [Git diff semantics](https://git-scm.com/docs/git-diff). Ranges require both endpoints; omitted endpoints and multiple ranges are intentionally unsupported. Comparisons summarize net changes, not every intervening commit.
+
+In working-tree mode, new untracked files are excluded. Run `git add <file>` to include a new file. A repository must have an initial commit. In range mode, files and detector snapshots come entirely from the selected commits, even if local files are modified, deleted, or malformed. Referenced commits must exist locally: fetch missing refs/history in shallow checkouts. Three-dot requires a common ancestor; two-dot can compare unrelated histories.
+
+References are verified as commits and pinned to hashes before analysis. Git is invoked without a shell, and untrusted references use [`rev-parse --verify --end-of-options`](https://git-scm.com/docs/git-rev-parse) before they can reach a diff command. Missing references, invalid ranges, and absent common ancestors produce concise errors with exit code `2`, without raw Git output or stack traces.
 
 The report includes changed-file and finding counts, then groups findings by HIGH, MEDIUM, and LOW severity. Each finding lists the relevant files. Suggested checks are deduplicated. Paths are quoted and escaped so tabs and newlines cannot break the report. File contents and raw diffs are not printed.
+
+The report identifies the comparison being analyzed. Severity headings use restrained colors only in interactive terminals. Redirected/piped output is plain text; `--no-color`, the `NO_COLOR` environment variable, `NODE_DISABLE_COLORS`, or `TERM=dumb` also disables colors. Help and version work without Git or a repository.
 
 ```text
 ChangeRadar
@@ -111,7 +129,8 @@ CLI -> Git adapter -> ChangeContext -> Detectors -> Findings -> Terminal reporte
 ```
 
 - `src/cli.ts` coordinates analysis, writes the completed report, and selects an exit code.
-- `src/git/gitAdapter.ts` runs Git through Node's `execFile`, passing arguments without a shell. An optional content filter loads before-and-after versions only for selected changed paths; renamed files preserve their original path.
+- `src/git/gitAdapter.ts` runs Git through Node's `execFile`, passing arguments without a shell. An optional content filter loads before-and-after versions only for selected changed paths; renamed files preserve their original path. Working-tree mode reads disk for the after side; ranges read both sides from commits.
+- `src/git/resolveComparison.ts` validates input, resolves commit hashes, and selects the merge base for three-dot comparisons. `ChangeContext.comparison` records the selected mode, labels, and commit endpoints.
 - `src/git/parseNameStatus.ts` parses null-delimited file statuses, preserving unusual filenames and rename paths.
 - `src/core/types.ts` defines the change context, severity, structured findings, and detector interface.
 - `src/core/runDetectors.ts` runs detectors, deduplicates equivalent findings, and orders them by severity.
@@ -134,6 +153,7 @@ import {
 } from "changeradar";
 
 const context = await getChanges(process.cwd(), {
+  comparison: "main...HEAD", // Omit to analyze local changes against HEAD.
   includeContent: (path) => isEnvironmentSource(path) || isDependencyManifest(path),
 });
 const findings = runDetectors(context, [
@@ -153,7 +173,7 @@ npm test
 npm run build
 ```
 
-Tests cover Git parsing, real temporary Git repositories, all five detector categories, duplicate handling, report formatting, and complete CLI analysis with exit codes.
+Tests cover Git parsing, real temporary Git repositories and divergent histories, all five detector categories, duplicate handling, report formatting/colors, and complete CLI analysis with exit codes. Comparison tests include dirty working trees, historical tags, missing refs, unrelated histories, renames, and secret exclusions.
 
 ## Exit Codes
 

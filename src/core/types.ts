@@ -4,11 +4,23 @@ export type ChangedFile =
   | { status: Exclude<ChangeStatus, "renamed">; path: string }
   | { status: "renamed"; path: string; previousPath: string };
 
+export type ChangeComparison =
+  | { mode: "working-tree"; baseRef: string; baseCommit: string }
+  | {
+    mode: "two-dot" | "three-dot";
+    baseRef: string;
+    targetRef: string;
+    // For three-dot comparisons, this is the merge base, not the base ref's tip.
+    baseCommit: string;
+    targetCommit: string;
+  };
+
 export interface ChangeContext {
   repositoryRoot: string;
   files: ChangedFile[];
   diff: string;
   fileContents?: FileContentChange[];
+  comparison?: ChangeComparison;
 }
 
 export interface FileContentChange {
