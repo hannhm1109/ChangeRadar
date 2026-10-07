@@ -10,14 +10,16 @@ Deployments often need steps that a code review can overlook: applying a migrati
 
 ## Installation
 
-**Initial version: 0.1.0.** Requires Node.js 22.12 or newer, npm, and Git on your PATH. npm publication is deferred: do not use `npx changeradar` expecting this project. `private: true` remains a guard against accidental publishing.
+**Current version: 0.1.1, licensed under MIT.** Requires Node.js 22.12 or newer, npm, and Git on your PATH. Tagged source and GitHub release packages do not depend on npm registry publication.
+
+Download `changeradar-0.1.1.tgz` from the [GitHub release](https://github.com/hannhm1109/ChangeRadar/releases/tag/v0.1.1), verify the checksum in its notes, and install it with the local-package instructions below. npm registry publication is a separate step; verify that the registry package links to this repository before installing by name.
 
 ### Build From Source
 
 ```bash
 git clone https://github.com/hannhm1109/ChangeRadar.git
 cd ChangeRadar
-git checkout v0.1.0
+git checkout v0.1.1
 npm ci --ignore-scripts
 npm run build
 npm run demo
@@ -41,18 +43,29 @@ To produce an installable artifact from the trusted checkout:
 npm pack
 ```
 
-The `prepack` hook builds the CLI first. The resulting `changeradar-0.1.0.tgz` contains compiled JS/types, documentation, and the runnable demo, not tests, local settings, or development dependencies. Do not skip lifecycle scripts when packing unless you have built and checked the output yourself.
+The `prepack` hook builds the CLI first. The resulting `changeradar-0.1.1.tgz` contains compiled JS/types, the MIT license, documentation, and the runnable demo, not tests, local settings, or development dependencies. Do not skip lifecycle scripts when packing unless you have built and checked the output yourself.
 
 An optional global installation exposes the CLI without a long path:
 
 ```bash
-npm install --global --ignore-scripts ./changeradar-0.1.0.tgz
+npm install --global --ignore-scripts ./changeradar-0.1.1.tgz
 cd /path/to/your-application
 changeradar analyze
 changeradar analyze origin/main...HEAD --format json
 ```
 
 The artifact contains the build, so installation does not need lifecycle scripts. npm still downloads declared runtime dependencies. On Windows, `changeradar.cmd` can be used when PowerShell blocks npm's `.ps1` shim. Remove a global installation with `npm uninstall --global changeradar`.
+
+### After npm Publication
+
+Only after `changeradar@0.1.1` is confirmed on the npm registry as this project's package, the equivalent commands are:
+
+```bash
+npx changeradar@0.1.1 analyze main...HEAD
+npm install --global changeradar@0.1.1
+```
+
+The pinned version makes the selected tool explicit. This section does not imply that registry publication has already completed.
 
 ## At a Glance
 
@@ -64,7 +77,7 @@ The artifact contains the build, so installation does not need lifecycle scripts
 | Scheduled-job or known deployment/config file changed | MEDIUM |
 | Root dependency declaration or lockfile changed | LOW |
 
-Text and JSON share one exit policy: **0** = no HIGH findings, **1** = HIGH findings to review, **2** = tool error. A HIGH finding is not a crashed CLI. [Changelog](CHANGELOG.md) and [release notes](docs/releases/v0.1.0.md) summarize the initial scope.
+Text and JSON share one exit policy: **0** = no HIGH findings, **1** = HIGH findings to review, **2** = tool error. A HIGH finding is not a crashed CLI. [Changelog](CHANGELOG.md) and [release notes](docs/releases/v0.1.1.md) summarize the initial scope.
 
 ## Try the Demo
 
@@ -254,7 +267,7 @@ The full example uploads the report for exits `0` and `1`, including HIGH findin
 
 Actions are pinned to verified full commit SHAs, credentials are not persisted, and permissions are limited to `contents: read`, following [GitHub's secure-use guidance](https://docs.github.com/en/actions/reference/security/secure-use). The example uses `pull_request`, not a privileged `pull_request_target` workflow, and does not require deployment credentials, secrets, a GitHub App, or PR comments.
 
-For another application repository, provide a trusted built copy of ChangeRadar and invoke its CLI by absolute path while the working directory is the application's Git tree. Do not build the tool from untrusted application PR code or run the application's install/build scripts just to scan its changes. This source-build example is for testing ChangeRadar itself on a disposable hosted runner. `npx changeradar` installation will only be documented after an npm release exists.
+For another application repository, provide a trusted built copy of ChangeRadar and invoke its CLI by absolute path while the working directory is the application's Git tree. Do not build the tool from untrusted application PR code or run the application's install/build scripts just to scan its changes. This source-build example is for testing ChangeRadar itself on a disposable hosted runner. Registry installation requires a verified npm release; do not assume a bare `npx changeradar` command selects this project before that release exists.
 
 Missing refs/history or no common ancestor are tool errors, never an assumed clean result. Fetch the required history before analyzing. For a push workflow, use the event's before/after SHAs with two-dot semantics instead; branch-creation events with an all-zero before SHA need an explicit baseline policy.
 
@@ -352,19 +365,19 @@ ChangeRadar highlights detected impacts; humans still decide whether and how to 
 
 ## Roadmap
 
-Possible next steps, intentionally not included in v0.1.0:
+Possible next steps, intentionally not included in v0.1.1:
 
 - Small explicit configuration for custom paths and severity rules.
 - Explicit workspace roots for monorepos.
 - Additional framework route conventions with focused tests.
-- npm publication after package naming, licensing, and distribution are settled.
+- Broader platform verification and real-world feedback before expanding detection rules.
 
 ## Release Preparation
 
-[docs/releases/v0.1.0.md](docs/releases/v0.1.0.md) contains the initial GitHub release notes. The intended tag is `v0.1.0`; the npm package version stays `0.1.0`. No npm publish automation or privileged release workflow is enabled.
+[docs/releases/v0.1.1.md](docs/releases/v0.1.1.md) contains the licensed release notes. The tag and package version are `v0.1.1` and `0.1.1`. The existing `v0.1.0` tag is retained as the original unlicensed candidate; it is not rewritten. No npm publish automation or privileged release workflow is enabled.
 
 Before tagging a future release, run the checks above, inspect `npm pack --dry-run --ignore-scripts --json` after building, and verify the changelog/version. Create a tag at the verified commit rather than tagging an unreviewed checkout. Publication remains a separate deliberate action.
 
 ## License
 
-No project license has been selected yet. Package metadata explicitly remains `UNLICENSED`; preparing a release does not add a license grant. Licensing and npm publication are separate owner decisions.
+MIT. See [LICENSE](LICENSE). Runtime dependencies retain their own licenses.

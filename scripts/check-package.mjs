@@ -30,16 +30,20 @@ try {
   assert.equal(packed.name, "changeradar");
   assert.equal(packed.version, manifest.version);
   const paths = packed.files.map((file) => file.path);
-  const required = ["package.json", "README.md", "CHANGELOG.md", "docs/demo.png", "scripts/demo.mjs", "dist/cli.js", "dist/index.js", "dist/index.d.ts"];
+  const required = ["package.json", "LICENSE", "README.md", "CHANGELOG.md", "docs/demo.png", "scripts/demo.mjs", "dist/cli.js", "dist/index.js", "dist/index.d.ts"];
   for (const path of required) assert.ok(paths.includes(path), `Missing package file: ${path}`);
   for (const path of paths) {
-    assert.ok(required.includes(path) || path === "LICENSE" || /^dist\/.+\.(?:js|js\.map|d\.ts)$/.test(path), `Unexpected package file: ${path}`);
+    assert.ok(required.includes(path) || /^dist\/.+\.(?:js|js\.map|d\.ts)$/.test(path), `Unexpected package file: ${path}`);
   }
   assert.equal(basename(packed.filename), packed.filename);
   const install = join(directory, "install");
   mkdirSync(install);
   writeFileSync(join(install, "package.json"), '{"name":"changeradar-install-check","private":true}\n');
   npm(["install", "--ignore-scripts", "--omit=dev", "--no-audit", "--no-fund", "--package-lock=false", join(directory, packed.filename)], install);
+  const installedManifest = JSON.parse(readFileSync(join(install, "node_modules/changeradar/package.json"), "utf8"));
+  assert.equal(installedManifest.version, manifest.version);
+  assert.equal(installedManifest.license, "MIT");
+  assert.equal(readFileSync(join(install, "node_modules/changeradar/LICENSE"), "utf8"), readFileSync(join(root, "LICENSE"), "utf8"));
   const version = cli(["--version"], install);
   assert.equal(version.status, 0, version.stderr);
   assert.equal(version.stdout.trim(), manifest.version);

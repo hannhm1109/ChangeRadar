@@ -1,9 +1,12 @@
 {
   "name": "changeradar",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Analyze Git changes and highlight deployment-impacting modifications.",
-  "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/hannhm1109/ChangeRadar.git"
@@ -21,6 +24,7 @@
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
+    "LICENSE",
     "README.md",
     "CHANGELOG.md",
     "docs/demo.png",

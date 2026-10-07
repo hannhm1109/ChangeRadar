@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const loader = import.meta.resolve("tsx");
+const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
 
 describe("CLI", () => {
   let directory: string;
@@ -54,7 +55,7 @@ describe("CLI", () => {
   it("displays the package version", () => {
     const result = run(["--version"], { ...process.env, PATH: "" });
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("0.1.0");
+    expect(result.stdout.trim()).toBe(version);
   });
 
   it("reports asynchronous output failures with exit code 2 and no stack trace", () => {

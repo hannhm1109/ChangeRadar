@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.1
+
+First licensed public release.
+
+- Add the MIT license to the source and compiled package.
+- Prepare public npm package metadata and verify that the installed package includes its license.
+- Make the CLI version regression test follow the package version.
+- Update installation and release documentation for `v0.1.1`.
+
+Detector behavior and JSON schema are unchanged from `0.1.0`. The already-pushed `v0.1.0` tag remains unchanged as the original unlicensed release candidate.
+
 ## 0.1.0
 
 Initial ChangeRadar release candidate.
