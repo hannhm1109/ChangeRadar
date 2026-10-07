@@ -4,9 +4,9 @@ ChangeRadar analyzes Git changes to highlight modifications that may affect depl
 
 ## Current Status
 
-Phase 6 is complete: all five MVP detector categories run through the shared engine and terminal reporter, with polished CLI help, default analysis, terminal colors, and Git reference/range comparisons.
+Phase 7 is complete: all five MVP detector categories support terminal or versioned JSON reports, consistent CI exit codes, Git reference/range comparisons, and a GitHub Actions usage example.
 
-Migration findings have HIGH severity; environment, API-route, and cron/config findings have MEDIUM severity; dependency findings have LOW severity. A report with no findings does not establish that a deployment is safe. Dedicated CI integration is the next phase.
+Migration findings have HIGH severity; environment, API-route, and cron/config findings have MEDIUM severity; dependency findings have LOW severity. A report with no findings does not establish that a deployment is safe. Final polish and release preparation remain separate phases; the package is not published to npm yet.
 
 ## Supported Detectors
 
@@ -89,7 +89,7 @@ References are verified as commits and pinned to hashes before analysis. Git is 
 
 The report includes changed-file and finding counts, then groups findings by HIGH, MEDIUM, and LOW severity. Each finding lists the relevant files. Suggested checks are deduplicated. Paths are quoted and escaped so tabs and newlines cannot break the report. File contents and raw diffs are not printed.
 
-The report identifies the comparison being analyzed. Severity headings use restrained colors only in interactive terminals. Redirected/piped output is plain text; `--no-color`, the `NO_COLOR` environment variable, `NODE_DISABLE_COLORS`, or `TERM=dumb` also disables colors. Help and version work without Git or a repository.
+The report identifies the comparison being analyzed. Severity headings use restrained colors only in interactive terminals. Redirected/piped output is plain text; a non-empty `CI` environment variable, `--no-color`, `NO_COLOR`, `NODE_DISABLE_COLORS`, or `TERM=dumb` also disables colors. Help and version work without Git or a repository.
 
 ```text
 ChangeRadar
@@ -122,10 +122,66 @@ Suggested deployment checks:
   [ ] Install dependencies from the updated manifest and lockfile, then run relevant tests.
 ```
 
+## CI Output
+
+Use the compiled CLI directly for machine-readable output. npm's script headers are not part of the JSON format.
+
+```bash
+npm ci --ignore-scripts
+npm run build
+node dist/cli.js analyze origin/main...HEAD --format json > changeradar-report.json
+```
+
+`--format text` is the default human-readable report. `--format json` writes exactly one completed JSON document to stdout, with a trailing newline and no terminal colors. Both formats use the same findings and exit-code policy.
+
+The JSON document contains:
+
+- `schemaVersion`: currently `1`; consumers should check this before interpreting the report.
+- `comparison`: mode, supplied ref labels, and resolved commit hashes. For three-dot mode, `baseCommit` is the actual merge base. Library contexts without comparison metadata report `null`.
+- `summary`: `changedFileCount`, `findingCount`, `bySeverity` counts for HIGH/MEDIUM/LOW, and `exitCode` (`0` or `1`).
+- `files`: changed-file statuses and repository-relative paths, including the old path for renames.
+- `findings`: detector, severity, title, file paths, and optional description/suggested action.
+- `suggestedChecks`: deduplicated deployment checks in report order.
+
+No raw patches, source snapshots, dependency specifiers, secret values, or absolute repository path are serialized. There are no timestamps or progress messages in JSON output. This makes it suitable for saving as a CI artifact or consuming from a script.
+
+A HIGH finding still writes the complete report, then exits `1`. A usage, Git, or detector error exits `2`, leaves stdout empty, and writes a concise diagnostic to stderr. An empty redirected file after an error is not a clean report. Check the process status before parsing it. Help/version are informational commands, not JSON analysis responses.
+
+## GitHub Actions
+
+[examples/github-actions.yml](examples/github-actions.yml) is a complete pull-request workflow example for this source repository. It is intentionally outside `.github/workflows/`, so adding the example does not enable CI automatically.
+
+The workflow builds ChangeRadar with Node.js 24, checks out the PR head with full history, and compares the event's base/head commit SHAs with three-dot semantics. Full history avoids the default shallow checkout losing a required reference or common ancestor, following the [checkout action documentation](https://github.com/actions/checkout#fetch-all-history-for-all-tags-and-branches).
+
+The analysis step is:
+
+```yaml
+- name: Analyze committed PR changes
+  id: analyze
+  shell: bash
+  env:
+    BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    CI: 'true'
+  run: |
+    status=0
+    node dist/cli.js analyze "$BASE_SHA...$HEAD_SHA" --format json > changeradar-report.json || status=$?
+    echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+    exit "$status"
+```
+
+The full example uploads the report for exits `0` and `1`, including HIGH findings, but does not upload an empty error report. Exiting with the original status still fails the job for HIGH findings or tool errors; there is no `continue-on-error` or unconditional `|| true` hiding failures. If piping through `tee` in another workflow, enable `set -o pipefail` so the pipe does not hide ChangeRadar's status.
+
+Actions are pinned to verified full commit SHAs, credentials are not persisted, and permissions are limited to `contents: read`, following [GitHub's secure-use guidance](https://docs.github.com/en/actions/reference/security/secure-use). The example uses `pull_request`, not a privileged `pull_request_target` workflow, and does not require deployment credentials, secrets, a GitHub App, or PR comments.
+
+For another application repository, provide a trusted built copy of ChangeRadar and invoke its CLI by absolute path while the working directory is the application's Git tree. Do not build the tool from untrusted application PR code or run the application's install/build scripts just to scan its changes. This source-build example is for testing ChangeRadar itself on a disposable hosted runner. `npx changeradar` installation will only be documented after an npm release exists.
+
+Missing refs/history or no common ancestor are tool errors, never an assumed clean result. Fetch the required history before analyzing. For a push workflow, use the event's before/after SHAs with two-dot semantics instead; branch-creation events with an all-zero before SHA need an explicit baseline policy.
+
 ## Architecture
 
 ```text
-CLI -> Git adapter -> ChangeContext -> Detectors -> Findings -> Terminal reporter
+CLI -> Git adapter -> ChangeContext -> Detectors -> Findings -> Text/JSON reporter
 ```
 
 - `src/cli.ts` coordinates analysis, writes the completed report, and selects an exit code.
@@ -134,15 +190,17 @@ CLI -> Git adapter -> ChangeContext -> Detectors -> Findings -> Terminal reporte
 - `src/git/parseNameStatus.ts` parses null-delimited file statuses, preserving unusual filenames and rename paths.
 - `src/core/types.ts` defines the change context, severity, structured findings, and detector interface.
 - `src/core/runDetectors.ts` runs detectors, deduplicates equivalent findings, and orders them by severity.
+- `src/core/exitCodes.ts` defines the analysis policy once, shared by the CLI and JSON summary.
 - `src/detectors/migrationDetector.ts` recognizes migration paths and change statuses.
 - `src/detectors/environmentDetector.ts` compares environment names using [Babel's JS/TS parser](https://babeljs.io/docs/babel-parser) for code and Node's built-in [parseEnv](https://nodejs.org/api/util.html#utilparseenvcontent) for example templates. Parsing syntax avoids treating comments and strings as executable references; no type checking or code execution is performed.
 - `src/detectors/apiRouteDetector.ts` maps supported Next.js file paths to API URL patterns and checks both sides of renames.
 - `src/detectors/dependencyDetector.ts` compares dependency maps with JSON parsing and summarizes unexplained lockfile changes.
 - `src/detectors/cronConfigDetector.ts` flags known job and configuration paths without reading their contents.
 - `src/reporters/terminalReporter.ts` formats findings without running Git or printing directly.
+- `src/reporters/jsonReporter.ts` creates versioned machine-readable reports from metadata and findings, not raw context contents.
 - `src/errors/ChangeRadarError.ts` provides typed errors with user-facing messages.
 
-Each detector implements `name` and `detect(context): Finding[]`. To add a detector, implement that interface and register it in the CLI's detector list. Detection stays independent of formatting, so the same findings can later support another output format.
+Each detector implements `name` and `detect(context): Finding[]`. To add a detector, implement that interface and register it in the CLI's detector list. Detection stays independent of formatting, so text and JSON reports reuse exactly the same findings.
 
 When using the library directly, load source and manifest contents before running their detectors:
 
@@ -175,10 +233,14 @@ npm run build
 
 Tests cover Git parsing, real temporary Git repositories and divergent histories, all five detector categories, duplicate handling, report formatting/colors, and complete CLI analysis with exit codes. Comparison tests include dirty working trees, historical tags, missing refs, unrelated histories, renames, and secret exclusions.
 
+CI tests cover JSON/text exit-code parity, complete reports on HIGH findings, no partial output on errors, automatic color suppression, and shallow clones before and after fetching missing history.
+
 ## Exit Codes
 
-- `0`: analysis completed with no HIGH findings, or help/version displayed.
-- `1`: HIGH deployment-impact findings detected.
-- `2`: CLI usage or tool execution error.
+- `0`: analysis completed with no HIGH findings (MEDIUM/LOW findings are non-blocking), or help/version displayed.
+- `1`: analysis completed with at least one HIGH finding; the full report is still available.
+- `2`: CLI usage or tool execution error; no analysis report is produced, even if an earlier detector found HIGH impacts.
+
+This policy is identical in text and JSON modes, locally and in CI. Exit `0` does not guarantee a safe deployment; it only means no HIGH impacts were detected by the enabled rules. For a non-blocking review workflow, handle exit `1` explicitly while continuing to fail on exit `2`; do not swallow every non-zero result.
 
 ChangeRadar highlights detected impacts; humans still decide whether and how to deploy.

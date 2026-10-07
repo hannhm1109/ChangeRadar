@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
-import { Command, CommanderError } from "commander";
+import { Command, CommanderError, Option } from "commander";
 import { ChangeRadarError } from "./errors/ChangeRadarError.js";
 import { getChanges } from "./git/gitAdapter.js";
 import { runDetectors } from "./core/runDetectors.js";
+import { getAnalysisExitCode } from "./core/exitCodes.js";
 import { migrationDetector } from "./detectors/migrationDetector.js";
 import { apiRouteDetector } from "./detectors/apiRouteDetector.js";
 import { dependencyDetector, isDependencyManifest } from "./detectors/dependencyDetector.js";
 import { cronConfigDetector } from "./detectors/cronConfigDetector.js";
 import { formatTerminalReport } from "./reporters/terminalReporter.js";
+import { formatJsonReport } from "./reporters/jsonReporter.js";
 
 const { version } = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
@@ -19,6 +21,7 @@ const program = new Command()
   .description("Inspect Git changes for deployment-impacting modifications")
   .version(version)
   .option("--no-color", "Disable terminal colors")
+  .addOption(new Option("--format <format>", "Report format").choices(["text", "json"]).default("text"))
   .showHelpAfterError()
   .configureHelp({ showGlobalOptions: true })
   .exitOverride()
@@ -33,9 +36,12 @@ program.command("analyze", { isDefault: true })
     "  changeradar analyze HEAD~1          Working tree against the previous commit",
     "  changeradar analyze v1.0..HEAD      Committed endpoint comparison",
     "  changeradar analyze main...HEAD     Merge base of main and HEAD to committed HEAD",
+    "  changeradar analyze main...HEAD --format json > report.json",
     "", "Ranges require both endpoints and ignore staged/unstaged changes.",
     "Working-tree mode excludes untracked files; stage new files with git add.",
-    "Colors are automatic in terminals; --no-color or NO_COLOR disables them.",
+    "Colors are automatic in terminals; CI, --no-color, or NO_COLOR disables them.",
+    "JSON reports contain metadata and findings only, never raw diffs or source contents.",
+    "Analysis errors leave stdout empty and write diagnostics to stderr, in either format.",
     "Exit codes: 0 = no HIGH findings; 1 = HIGH findings; 2 = usage or tool error.",
   ].join("\n"))
   .action(async (comparison: string | undefined) => {
@@ -47,11 +53,13 @@ program.command("analyze", { isDefault: true })
     const findings = runDetectors(context, [
       migrationDetector, environmentDetector, apiRouteDetector, dependencyDetector, cronConfigDetector,
     ]);
-    const color = Boolean(process.stdout.isTTY) && program.opts<{ color: boolean }>().color
+    const options = program.opts<{ color: boolean; format: "text" | "json" }>();
+    const color = Boolean(process.stdout.isTTY) && options.color && !process.env.CI
       && process.env.NO_COLOR === undefined && process.env.NODE_DISABLE_COLORS === undefined
       && process.env.TERM !== "dumb";
-    process.stdout.write(formatTerminalReport(context, findings, { color }));
-    process.exitCode = findings.some((finding) => finding.severity === "HIGH") ? 1 : 0;
+    process.stdout.write(options.format === "json"
+      ? formatJsonReport(context, findings) : formatTerminalReport(context, findings, { color }));
+    process.exitCode = getAnalysisExitCode(findings);
   });
 
 try {

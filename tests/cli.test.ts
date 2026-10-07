@@ -106,12 +106,14 @@ describe("CLI", () => {
     { options: [], variables: { NO_COLOR: "1" }, colored: false },
     { options: [], variables: { NODE_DISABLE_COLORS: "1" }, colored: false },
     { options: [], variables: { TERM: "dumb" }, colored: false },
+    { options: [], variables: { CI: "true" }, colored: false },
+    { options: ["--format", "json"], variables: {}, colored: false },
   ])("applies interactive color policy: %j", ({ options, variables, colored }) => {
     initializeRepository();
     writeFileSync(join(directory, "vercel.json"), "{}\n");
     git("add", ".");
     const env = Object.fromEntries(Object.entries(process.env)
-      .filter(([key]) => !["NO_COLOR", "NODE_DISABLE_COLORS", "FORCE_COLOR", "TERM"].includes(key)));
+      .filter(([key]) => !["NO_COLOR", "NODE_DISABLE_COLORS", "FORCE_COLOR", "TERM", "CI"].includes(key)));
     // Simulate the stream's TTY capability while capturing the actual CLI output.
     const bootstrap = `process.stdout.isTTY = true;
       process.argv = ${JSON.stringify([process.execPath, cliPath, "analyze", ...options])};
