@@ -6,6 +6,8 @@ import { getChanges } from "./git/gitAdapter.js";
 import { runDetectors } from "./core/runDetectors.js";
 import { migrationDetector } from "./detectors/migrationDetector.js";
 import { apiRouteDetector } from "./detectors/apiRouteDetector.js";
+import { dependencyDetector, isDependencyManifest } from "./detectors/dependencyDetector.js";
+import { cronConfigDetector } from "./detectors/cronConfigDetector.js";
 import { formatTerminalReport } from "./reporters/terminalReporter.js";
 
 const { version } = JSON.parse(
@@ -24,8 +26,12 @@ program.command("analyze")
   .addHelpText("after", "\nNew files must be staged with git add to appear in the analysis.")
   .action(async () => {
     const { environmentDetector, isEnvironmentSource } = await import("./detectors/environmentDetector.js");
-    const context = await getChanges(process.cwd(), { includeContent: isEnvironmentSource });
-    const findings = runDetectors(context, [migrationDetector, environmentDetector, apiRouteDetector]);
+    const context = await getChanges(process.cwd(), {
+      includeContent: (path) => isEnvironmentSource(path) || isDependencyManifest(path),
+    });
+    const findings = runDetectors(context, [
+      migrationDetector, environmentDetector, apiRouteDetector, dependencyDetector, cronConfigDetector,
+    ]);
     process.stdout.write(formatTerminalReport(context, findings));
     process.exitCode = findings.some((finding) => finding.severity === "HIGH") ? 1 : 0;
   });

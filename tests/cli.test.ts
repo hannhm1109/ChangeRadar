@@ -258,4 +258,124 @@ describe("CLI", () => {
     expect(result.stdout).not.toContain("API route renamed:");
     expect(result.stderr).toBe("");
   });
+
+  it("reports meaningful manifest edits without a redundant lockfile finding", () => {
+    initializeRepository();
+    writeFileSync(join(directory, "package.json"), JSON.stringify({
+      dependencies: { axios: "1", zod: "3" }, devDependencies: { vitest: "4" },
+    }));
+    writeFileSync(join(directory, "package-lock.json"), '{"lockfileVersion":3}\n');
+    git("add", ".");
+    git("commit", "--quiet", "-m", "Initial dependencies");
+    writeFileSync(join(directory, "package.json"), JSON.stringify({
+      dependencies: { stripe: "1", zod: "4" }, devDependencies: { vitest: "5" },
+    }));
+    writeFileSync(join(directory, "package-lock.json"), '{"lockfileVersion":3,"packages":{}}\n');
+    const result = run(["analyze"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("4 deployment impacts detected");
+    expect(result.stdout).toContain("Removed dependency: axios");
+    expect(result.stdout).toContain("Added dependency: stripe");
+    expect(result.stdout).toContain("Updated dependency: zod");
+    expect(result.stdout).toContain("Updated dependency: vitest");
+    expect(result.stdout).toContain("Dependency section: devDependencies.");
+    expect(result.stdout).not.toContain("Dependency lockfiles changed");
+    expect(result.stdout.match(/\[ \]/g)).toHaveLength(1);
+    expect(result.stderr).toBe("");
+  });
+
+  it("groups lockfile-only changes into one LOW finding without printing contents", () => {
+    initializeRepository();
+    for (const path of ["package-lock.json", "pnpm-lock.yaml", "yarn.lock"]) {
+      writeFileSync(join(directory, path), "lockfile fixture contents not for display\n");
+    }
+    git("add", ".");
+    const result = run(["analyze"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("1 deployment impact detected");
+    expect(result.stdout).toContain("\nLOW\n");
+    expect(result.stdout).toContain("Dependency lockfiles changed");
+    expect(result.stdout).toContain('"package-lock.json"');
+    expect(result.stdout).toContain('"pnpm-lock.yaml"');
+    expect(result.stdout).toContain('"yarn.lock"');
+    expect(result.stdout).not.toContain("lockfile fixture contents");
+  });
+
+  it("reports cron, Vercel, workflow, and container files without printing configuration", () => {
+    initializeRepository();
+    mkdirSync(join(directory, "cron.d"));
+    mkdirSync(join(directory, ".github", "workflows"), { recursive: true });
+    writeFileSync(join(directory, "cron.d", "cleanup"), "0 * * * * run-cleanup\n");
+    writeFileSync(join(directory, "vercel.json"), '{"crons":[{"path":"/api/cleanup","schedule":"0 * * * *"}]}\n');
+    writeFileSync(join(directory, ".github", "workflows", "deploy.yml"), "name: deploy\non: push\n");
+    writeFileSync(join(directory, "Dockerfile"), "FROM node:22\n");
+    git("add", ".");
+    const result = run(["analyze"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("4 deployment impacts detected");
+    for (const label of ["Scheduled job file", "Deployment configuration", "CI workflow", "Container configuration"]) {
+      expect(result.stdout).toContain(`${label} added`);
+    }
+    expect(result.stdout).not.toContain("FROM node");
+    expect(result.stdout).not.toContain("run-cleanup");
+    expect(result.stderr).toBe("");
+  });
+
+  it("reports deleted manifests and cron files plus renamed workflows", () => {
+    initializeRepository();
+    mkdirSync(join(directory, ".github", "workflows"), { recursive: true });
+    writeFileSync(join(directory, "package.json"), '{"dependencies":{"stripe":"1"}}\n');
+    writeFileSync(join(directory, "crontab"), "0 * * * * cleanup\n");
+    writeFileSync(join(directory, ".github", "workflows", "old.yml"), "name: deploy\non: push\n");
+    git("add", ".");
+    git("commit", "--quiet", "-m", "Existing deployment files");
+    unlinkSync(join(directory, "package.json"));
+    unlinkSync(join(directory, "crontab"));
+    git("mv", ".github/workflows/old.yml", ".github/workflows/new.yml");
+    const result = run(["analyze"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("3 deployment impacts detected");
+    expect(result.stdout).toContain("Removed dependency: stripe");
+    expect(result.stdout).toContain("Scheduled job file deleted");
+    expect(result.stdout).toContain("CI workflow renamed");
+    expect(result.stdout).toContain('".github/workflows/old.yml"');
+    expect(result.stdout).toContain('".github/workflows/new.yml"');
+    expect(result.stderr).toBe("");
+  });
+
+  it("rejects malformed package.json without exposing its contents", () => {
+    initializeRepository();
+    writeFileSync(join(directory, "package.json"), '{"dependencies":{"private":"never-print-this-value"},');
+    git("add", "package.json");
+    const result = run(["analyze"]);
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain('Unable to analyze dependencies in "package.json"');
+    expect(result.stderr).not.toContain("never-print-this-value");
+    expect(result.stderr).not.toContain("SyntaxError");
+  });
+
+  it("runs all five MVP detectors with severity grouping and the HIGH exit code", () => {
+    initializeRepository();
+    mkdirSync(join(directory, "migrations"));
+    mkdirSync(join(directory, "app", "api", "orders"), { recursive: true });
+    mkdirSync(join(directory, ".github", "workflows"), { recursive: true });
+    writeFileSync(join(directory, "package.json"), '{"dependencies":{"stripe":"1"}}\n');
+    writeFileSync(join(directory, "package-lock.json"), '{"lockfileVersion":3}\n');
+    writeFileSync(join(directory, "migrations", "001.sql"), "CREATE TABLE orders (id INT);\n");
+    writeFileSync(join(directory, "app", "api", "orders", "route.ts"),
+      "export function GET() { return Response.json({ key: process.env.PAYMENT_API_KEY }); }\n");
+    writeFileSync(join(directory, ".github", "workflows", "deploy.yml"), "name: deploy\non: push\n");
+    git("add", ".");
+    const result = run(["analyze"]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("5 deployment impacts detected");
+    for (const title of ["Database migration added", "New environment variable detected: PAYMENT_API_KEY",
+      "API route added: /api/orders", "CI workflow added", "Added dependency: stripe"]) {
+      expect(result.stdout).toContain(title);
+    }
+    expect(result.stdout.indexOf("\nHIGH\n")).toBeLessThan(result.stdout.indexOf("\nMEDIUM\n"));
+    expect(result.stdout.indexOf("\nMEDIUM\n")).toBeLessThan(result.stdout.indexOf("\nLOW\n"));
+    expect(result.stderr).toBe("");
+  });
 });

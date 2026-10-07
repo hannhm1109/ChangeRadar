@@ -4,9 +4,9 @@ ChangeRadar analyzes Git changes to highlight modifications that may affect depl
 
 ## Current Status
 
-Phase 4 is complete: environment-variable, migration, and Next.js API-route detectors run through the shared engine and terminal reporter.
+Phase 5 is complete: all five MVP detector categories run through the shared engine and terminal reporter: environment variables, migrations, Next.js API routes, dependencies, and cron/config files.
 
-Environment and API-route findings have MEDIUM severity; migration findings have HIGH severity. Dependencies and scheduled jobs will be added in subsequent phases. A report with no findings does not establish that a deployment is safe.
+Migration findings have HIGH severity; environment, API-route, and cron/config findings have MEDIUM severity; dependency findings have LOW severity. A report with no findings does not establish that a deployment is safe. CLI polish and reference/range support come in the next phase.
 
 ## Supported Detectors
 
@@ -33,6 +33,19 @@ Paths are translated into URL patterns: `app/api/orders/route.ts` and `pages/api
 Renames include both affected files. A changed URL reports its old and new patterns; a file move that preserves the URL reports a modification. Moves into or out of recognized routing paths report an added or deleted route. Suggested checks identify the affected endpoint and, for removals, its consumers.
 
 The rule is path-based, following the documented [App Router route convention](https://nextjs.org/docs/app/api-reference/file-conventions/route) and [Pages API convention](https://nextjs.org/docs/pages/building-your-application/routing/api-routes). It does not validate handler exports or infer HTTP methods, schemas, or breaking changes. Tests and declarations are excluded conservatively. App Router private folders and advanced parallel/interception layouts are skipped. Route handlers outside `/api`, monorepo app roots, configured page extensions, rewrites, and `basePath` are not resolved.
+
+Dependency detection compares the root `package.json` before and after a change. It reports added, removed, and updated names in `dependencies`, `devDependencies`, `optionalDependencies`, and `peerDependencies`, identifying the affected section. Moving a name between sections reports a removal from one and an addition to the other. Comparison uses declared specifier strings, not installed versions or semantic-version risk. Specifiers and any embedded credentials are not printed.
+
+Formatting, key order, scripts, package version, and other metadata-only edits are ignored. Changed root `package-lock.json`, `pnpm-lock.yaml`, and `yarn.lock` files produce one grouped fallback finding when there are no direct manifest dependency findings. This avoids reporting the same direct update twice while still highlighting lockfile-only resolution changes. Lockfiles are not parsed line by line. A malformed manifest or dependency section produces a tool error. Nested workspace manifests, overrides, bundled dependencies, and other package managers are not analyzed yet. The supported declaration fields follow [npm's package.json documentation](https://docs.npmjs.com/cli/v11/configuring-npm/package-json/).
+
+Cron/config detection uses explicit root-relative paths:
+
+- Scheduled jobs: `crontab`, `crontab.txt`, files named with letters, digits, underscores, or hyphens under `cron.d/`, and `.sh`, `.js`, `.ts`, `.cjs`, `.mjs`, `.cts`, `.mts`, `.py`, `.rb`, or `.php` files under `cron/`.
+- Deployment configuration: root [vercel.json](https://vercel.com/docs/project-configuration/vercel-json).
+- CI workflows: `.github/workflows/*.yml` and `*.yaml`, following the [GitHub Actions workflow location](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax).
+- Container configuration: root `Dockerfile`, `.dockerignore`, `docker-compose.yml`/`.yaml`, and `compose.yml`/`.yaml`. Dockerfile and Compose variants with `dev`, `development`, `prod`, `production`, `staging`, or `test` suffixes are also supported.
+
+These findings identify additions, edits, deletions, and renames. Moves into or out of recognized paths are reported; moves between categories produce a finding for each affected category. Job tests and declarations are excluded. Configuration contents are not parsed, schedules are not validated, and workflows or containers are not executed. A workflow or Vercel edit is reported as configuration impact, not automatically described as a schedule change. Arbitrary config directories and custom conventions are intentionally excluded.
 
 ## Local Development
 
@@ -63,8 +76,8 @@ The report includes changed-file and finding counts, then groups findings by HIG
 ```text
 ChangeRadar
 
-3 files changed against HEAD
-3 deployment impacts detected
+6 files changed against HEAD
+5 deployment impacts detected
 
 HIGH
   Database migration added
@@ -75,11 +88,20 @@ MEDIUM
     "src/config.ts"
   API route modified: /api/orders
     "app/api/orders/route.ts"
+  Scheduled job file modified
+    "crontab"
+
+LOW
+  Added dependency: stripe
+    Dependency section: dependencies.
+    "package.json"
 
 Suggested deployment checks:
   [ ] Review and apply database migrations before deployment.
   [ ] Configure PAYMENT_API_KEY in the deployment environment.
   [ ] Regression test /api/orders before deployment.
+  [ ] Review job schedules and verify the affected jobs in the deployment environment.
+  [ ] Install dependencies from the updated manifest and lockfile, then run relevant tests.
 ```
 
 ## Architecture
@@ -96,21 +118,30 @@ CLI -> Git adapter -> ChangeContext -> Detectors -> Findings -> Terminal reporte
 - `src/detectors/migrationDetector.ts` recognizes migration paths and change statuses.
 - `src/detectors/environmentDetector.ts` compares environment names using [Babel's JS/TS parser](https://babeljs.io/docs/babel-parser) for code and Node's built-in [parseEnv](https://nodejs.org/api/util.html#utilparseenvcontent) for example templates. Parsing syntax avoids treating comments and strings as executable references; no type checking or code execution is performed.
 - `src/detectors/apiRouteDetector.ts` maps supported Next.js file paths to API URL patterns and checks both sides of renames.
+- `src/detectors/dependencyDetector.ts` compares dependency maps with JSON parsing and summarizes unexplained lockfile changes.
+- `src/detectors/cronConfigDetector.ts` flags known job and configuration paths without reading their contents.
 - `src/reporters/terminalReporter.ts` formats findings without running Git or printing directly.
 - `src/errors/ChangeRadarError.ts` provides typed errors with user-facing messages.
 
 Each detector implements `name` and `detect(context): Finding[]`. To add a detector, implement that interface and register it in the CLI's detector list. Detection stays independent of formatting, so the same findings can later support another output format.
 
-When using the library directly, load source contents before running the environment detector:
+When using the library directly, load source and manifest contents before running their detectors:
 
 ```ts
-import { getChanges, isEnvironmentSource, runDetectors, environmentDetector, migrationDetector, apiRouteDetector } from "changeradar";
+import {
+  getChanges, runDetectors, isEnvironmentSource, isDependencyManifest,
+  environmentDetector, migrationDetector, apiRouteDetector, dependencyDetector, cronConfigDetector,
+} from "changeradar";
 
-const context = await getChanges(process.cwd(), { includeContent: isEnvironmentSource });
-const findings = runDetectors(context, [migrationDetector, environmentDetector, apiRouteDetector]);
+const context = await getChanges(process.cwd(), {
+  includeContent: (path) => isEnvironmentSource(path) || isDependencyManifest(path),
+});
+const findings = runDetectors(context, [
+  migrationDetector, environmentDetector, apiRouteDetector, dependencyDetector, cronConfigDetector,
+]);
 ```
 
-The environment detector fails clearly if the context has no content snapshots. The CLI loads them automatically.
+The environment detector requires content snapshots; the dependency detector requires a snapshot for each changed root manifest. Both fail clearly if required contents were not loaded. The CLI loads them automatically.
 
 Duplicate findings have the same detector, severity, title, description, file set, and suggested action. Different files or advice remain separate findings. A detector failure stops analysis with a tool error instead of producing an incomplete success report.
 
@@ -122,7 +153,7 @@ npm test
 npm run build
 ```
 
-Tests cover Git parsing, real temporary Git repositories, the detector runner, environment and migration detection, API URL mapping and renames, report formatting, and complete CLI analysis with exit codes.
+Tests cover Git parsing, real temporary Git repositories, all five detector categories, duplicate handling, report formatting, and complete CLI analysis with exit codes.
 
 ## Exit Codes
 

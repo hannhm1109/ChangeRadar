@@ -6,5 +6,7 @@ export type { GitChangeOptions } from "./git/gitAdapter.js";
 export { runDetectors } from "./core/runDetectors.js";
 export { migrationDetector } from "./detectors/migrationDetector.js";
 export { apiRouteDetector } from "./detectors/apiRouteDetector.js";
+export { dependencyDetector, isDependencyManifest } from "./detectors/dependencyDetector.js";
+export { cronConfigDetector } from "./detectors/cronConfigDetector.js";
 export { environmentDetector, isEnvironmentSource } from "./detectors/environmentDetector.js";
 export { formatTerminalReport } from "./reporters/terminalReporter.js";

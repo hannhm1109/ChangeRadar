@@ -6,6 +6,7 @@ export type ChangeRadarErrorCode =
   | "INVALID_GIT_OUTPUT"
   | "FILE_READ_FAILED"
   | "INVALID_SOURCE"
+  | "INVALID_MANIFEST"
   | "DETECTOR_FAILED";
 
 export class ChangeRadarError extends Error {
