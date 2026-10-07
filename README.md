@@ -2,11 +2,69 @@
 
 ChangeRadar analyzes Git changes to highlight modifications that may affect deployment: environment variables, database migrations, API routes, dependencies, and scheduled jobs.
 
-## Current Status
+Deployments often need steps that a code review can overlook: applying a migration, configuring a new variable, or checking a changed endpoint. ChangeRadar turns those detected changes into a deployment checklist. It reports impacts; it does not decide whether a deployment is safe.
 
-Phase 8 is complete: the five MVP detectors, text/JSON reports, Git comparisons, and CI example have been reviewed and regression-tested, including privacy, merge-conflict, output-stream, and large-diff edge cases. A runnable temporary-repository demo is included.
+![ChangeRadar demo report showing all five detector categories and suggested deployment checks](docs/demo.png)
 
-Migration findings have HIGH severity; environment, API-route, and cron/config findings have MEDIUM severity; dependency findings have LOW severity. A report with no findings does not establish that a deployment is safe. Release preparation is the next phase; the package is not published to npm yet.
+*Preview rendered from the real compiled demo output, not a simulated report.*
+
+## Installation
+
+**Initial version: 0.1.0.** Requires Node.js 22.12 or newer, npm, and Git on your PATH. npm publication is deferred: do not use `npx changeradar` expecting this project. `private: true` remains a guard against accidental publishing.
+
+### Build From Source
+
+```bash
+git clone https://github.com/hannhm1109/ChangeRadar.git
+cd ChangeRadar
+git checkout v0.1.0
+npm ci --ignore-scripts
+npm run build
+npm run demo
+```
+
+Build ChangeRadar once, then run its compiled CLI from the Git repository you want to analyze. The working directory selects the repository, not the CLI's location:
+
+```bash
+cd /path/to/your-application
+node /path/to/ChangeRadar/dist/cli.js analyze
+node /path/to/ChangeRadar/dist/cli.js analyze origin/main...HEAD --format json
+```
+
+In PowerShell, use a quoted Windows path, for example `node 'C:\tools\ChangeRadar\dist\cli.js' analyze`. No application install/build is required for scanning. References and their history must exist locally.
+
+### Install a Local Package
+
+To produce an installable artifact from the trusted checkout:
+
+```bash
+npm pack
+```
+
+The `prepack` hook builds the CLI first. The resulting `changeradar-0.1.0.tgz` contains compiled JS/types, documentation, and the runnable demo, not tests, local settings, or development dependencies. Do not skip lifecycle scripts when packing unless you have built and checked the output yourself.
+
+An optional global installation exposes the CLI without a long path:
+
+```bash
+npm install --global --ignore-scripts ./changeradar-0.1.0.tgz
+cd /path/to/your-application
+changeradar analyze
+changeradar analyze origin/main...HEAD --format json
+```
+
+The artifact contains the build, so installation does not need lifecycle scripts. npm still downloads declared runtime dependencies. On Windows, `changeradar.cmd` can be used when PowerShell blocks npm's `.ps1` shim. Remove a global installation with `npm uninstall --global changeradar`.
+
+## At a Glance
+
+| Detected impact | Severity |
+| --- | --- |
+| Database migration added, changed, removed, or renamed | HIGH |
+| New environment variable reference or example-template key | MEDIUM |
+| Next.js API route added, changed, removed, or renamed | MEDIUM |
+| Scheduled-job or known deployment/config file changed | MEDIUM |
+| Root dependency declaration or lockfile changed | LOW |
+
+Text and JSON share one exit policy: **0** = no HIGH findings, **1** = HIGH findings to review, **2** = tool error. A HIGH finding is not a crashed CLI. [Changelog](CHANGELOG.md) and [release notes](docs/releases/v0.1.0.md) summarize the initial scope.
 
 ## Try the Demo
 
@@ -253,12 +311,18 @@ npm run typecheck
 npm test
 npm run build
 node --check scripts/demo.mjs
+node --check scripts/check-package.mjs
+npm run check:package
 git diff --check
 ```
 
 Tests cover Git parsing, real temporary Git repositories and divergent histories, all five detector categories, duplicate handling, report formatting/colors, and complete CLI analysis with exit codes. Comparison tests include dirty working trees, historical tags, missing refs, unrelated histories, renames, and secret exclusions.
 
-CI tests cover JSON/text exit-code parity, complete reports on HIGH findings, no partial output on errors, automatic color suppression, and shallow clones before and after fetching missing history.
+CI tests cover JSON/text exit-code parity, complete reports on HIGH findings, empty stdout on analysis errors, automatic color suppression, and shallow clones before and after fetching missing history.
+
+`check:package` builds and packs the project, checks the shipped file allowlist, installs it in a temporary directory with only runtime dependencies and lifecycle scripts disabled, then tests CLI help/version, npm's installed command shim, library exports, all five demo categories, and exit/error behavior. It requires registry access for dependency installation and cleans up only its own temporary directory.
+
+The README preview can be regenerated on Windows after building with `powershell -NoProfile -File scripts/capture-demo.ps1`. It renders the demo's actual captured output into a PNG; it does not require a terminal recording service.
 
 Strict TypeScript checks also reject unused locals/parameters and accidental switch fallthrough. No separate lint dependency is required for these checks. Regression tests cover secret renames, unresolved index entries, unusual migration filenames, asynchronous write failures, and skipping large unrelated patches. Git command output and selected contents are bounded to 20 MiB; individual Git commands time out after 30 seconds. The CLI avoids generating raw patches, but large selected source/manifests still produce a tool error rather than an incomplete report.
 
@@ -285,3 +349,22 @@ The full suite and compiled demo have been verified on Windows with Node.js 22.1
 This policy is identical in text and JSON modes, locally and in CI. Exit `0` does not guarantee a safe deployment; it only means no HIGH impacts were detected by the enabled rules. For a non-blocking review workflow, handle exit `1` explicitly while continuing to fail on exit `2`; do not swallow every non-zero result.
 
 ChangeRadar highlights detected impacts; humans still decide whether and how to deploy.
+
+## Roadmap
+
+Possible next steps, intentionally not included in v0.1.0:
+
+- Small explicit configuration for custom paths and severity rules.
+- Explicit workspace roots for monorepos.
+- Additional framework route conventions with focused tests.
+- npm publication after package naming, licensing, and distribution are settled.
+
+## Release Preparation
+
+[docs/releases/v0.1.0.md](docs/releases/v0.1.0.md) contains the initial GitHub release notes. The intended tag is `v0.1.0`; the npm package version stays `0.1.0`. No npm publish automation or privileged release workflow is enabled.
+
+Before tagging a future release, run the checks above, inspect `npm pack --dry-run --ignore-scripts --json` after building, and verify the changelog/version. Create a tag at the verified commit rather than tagging an unreviewed checkout. Publication remains a separate deliberate action.
+
+## License
+
+No project license has been selected yet. Package metadata explicitly remains `UNLICENSED`; preparing a release does not add a license grant. Licensing and npm publication are separate owner decisions.
