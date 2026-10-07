@@ -193,4 +193,69 @@ describe("CLI", () => {
     expect(result.stderr).not.toContain("never-print-this-value");
     expect(result.stderr).not.toContain("SyntaxError");
   });
+
+  it("reports added App and Pages routes alongside environment and migration findings", () => {
+    initializeRepository();
+    mkdirSync(join(directory, "app", "api", "orders"), { recursive: true });
+    mkdirSync(join(directory, "pages", "api"), { recursive: true });
+    mkdirSync(join(directory, "migrations"));
+    writeFileSync(join(directory, "app", "api", "orders", "route.ts"),
+      "export function GET() { return Response.json({ key: process.env.API_KEY }); }\n");
+    writeFileSync(join(directory, "pages", "api", "health.js"),
+      "export default function handler(req, res) { res.json({ healthy: true }); }\n");
+    writeFileSync(join(directory, "migrations", "001.sql"), "CREATE TABLE orders (id INT);\n");
+    git("add", ".");
+    const result = run(["analyze"]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("4 deployment impacts detected");
+    expect(result.stdout).toContain("API route added: /api/orders");
+    expect(result.stdout).toContain("API route added: /api/health");
+    expect(result.stdout).toContain("New environment variable detected: API_KEY");
+    expect(result.stdout).toContain("Database migration added");
+    expect(result.stderr).toBe("");
+  });
+
+  it("reports modified, deleted, and renamed src API routes with exit code 0", () => {
+    initializeRepository();
+    mkdirSync(join(directory, "src", "app", "api", "orders"), { recursive: true });
+    mkdirSync(join(directory, "src", "pages", "api"), { recursive: true });
+    const appPath = join(directory, "src", "app", "api", "orders", "route.ts");
+    writeFileSync(appPath, "export function GET() { return Response.json({ version: 1 }); }\n");
+    writeFileSync(join(directory, "src", "pages", "api", "removed.ts"),
+      "export default function removed(req, res) { res.json({ removed: true }); }\n");
+    writeFileSync(join(directory, "src", "pages", "api", "old.ts"),
+      "export default function renamed(req, res) { res.json({ renamed: true }); }\n");
+    git("add", ".");
+    git("commit", "--quiet", "-m", "Existing routes");
+    writeFileSync(appPath, "export function GET() { return Response.json({ version: 2 }); }\n");
+    unlinkSync(join(directory, "src", "pages", "api", "removed.ts"));
+    git("mv", "src/pages/api/old.ts", "src/pages/api/new.ts");
+    const result = run(["analyze"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("3 deployment impacts detected");
+    expect(result.stdout).toContain("API route modified: /api/orders");
+    expect(result.stdout).toContain("API route deleted: /api/removed");
+    expect(result.stdout).toContain("API route renamed: /api/old -> /api/new");
+    expect(result.stdout).toContain('"src/pages/api/old.ts"');
+    expect(result.stdout).toContain('"src/pages/api/new.ts"');
+    expect(result.stderr).toBe("");
+  });
+
+  it("reports a Pages-to-App move without claiming that the URL changed", () => {
+    initializeRepository();
+    mkdirSync(join(directory, "pages", "api"), { recursive: true });
+    writeFileSync(join(directory, "pages", "api", "orders.js"),
+      "export function GET() { return Response.json({ orders: [] }); }\n");
+    git("add", ".");
+    git("commit", "--quiet", "-m", "Existing route");
+    mkdirSync(join(directory, "app", "api", "orders"), { recursive: true });
+    git("mv", "pages/api/orders.js", "app/api/orders/route.ts");
+    const result = run(["analyze"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("1 deployment impact detected");
+    expect(result.stdout).toContain("API route modified: /api/orders");
+    expect(result.stdout).toContain("Route file renamed; URL pattern is unchanged.");
+    expect(result.stdout).not.toContain("API route renamed:");
+    expect(result.stderr).toBe("");
+  });
 });

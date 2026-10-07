@@ -5,6 +5,7 @@ import { ChangeRadarError } from "./errors/ChangeRadarError.js";
 import { getChanges } from "./git/gitAdapter.js";
 import { runDetectors } from "./core/runDetectors.js";
 import { migrationDetector } from "./detectors/migrationDetector.js";
+import { apiRouteDetector } from "./detectors/apiRouteDetector.js";
 import { formatTerminalReport } from "./reporters/terminalReporter.js";
 
 const { version } = JSON.parse(
@@ -24,7 +25,7 @@ program.command("analyze")
   .action(async () => {
     const { environmentDetector, isEnvironmentSource } = await import("./detectors/environmentDetector.js");
     const context = await getChanges(process.cwd(), { includeContent: isEnvironmentSource });
-    const findings = runDetectors(context, [migrationDetector, environmentDetector]);
+    const findings = runDetectors(context, [migrationDetector, environmentDetector, apiRouteDetector]);
     process.stdout.write(formatTerminalReport(context, findings));
     process.exitCode = findings.some((finding) => finding.severity === "HIGH") ? 1 : 0;
   });
