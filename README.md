@@ -10,9 +10,33 @@ Deployments often need steps that a code review can overlook: applying a migrati
 
 ## Installation
 
-**Current version: 0.1.1, licensed under MIT.** Requires Node.js 22.12 or newer, npm, and Git on your PATH. Tagged source and GitHub release packages do not depend on npm registry publication.
+**Published version: [changeradar@0.1.1](https://www.npmjs.com/package/changeradar), licensed under MIT.** Requires Node.js 22.12 or newer, npm, and Git on your PATH.
 
-Download `changeradar-0.1.1.tgz` from the [GitHub release](https://github.com/hannhm1109/ChangeRadar/releases/tag/v0.1.1), verify the checksum in its notes, and install it with the local-package instructions below. npm registry publication is a separate step; verify that the registry package links to this repository before installing by name.
+### Run With npm
+
+From the Git repository you want to analyze:
+
+```bash
+npx changeradar analyze
+npx changeradar analyze main...HEAD
+```
+
+To select an exact version and save a machine-readable report:
+
+```bash
+npx changeradar@0.1.1 analyze main...HEAD --format json > changeradar-report.json
+```
+
+For repeated use, an optional global installation exposes the same command:
+
+```bash
+npm install --global changeradar@0.1.1
+changeradar analyze
+```
+
+`npx` can prompt before downloading the package. Analysis exits `1` for HIGH findings and `2` for tool errors, even when invoked through `npx`. References and their history must exist locally. Installation downloads ChangeRadar and its runtime dependencies; it does not install or build the application being analyzed.
+
+Alternatively, download `changeradar-0.1.1.tgz` from the [GitHub release](https://github.com/hannhm1109/ChangeRadar/releases/tag/v0.1.1), verify the checksum in its notes, and use the local-package instructions below.
 
 ### Build From Source
 
@@ -55,17 +79,6 @@ changeradar analyze origin/main...HEAD --format json
 ```
 
 The artifact contains the build, so installation does not need lifecycle scripts. npm still downloads declared runtime dependencies. On Windows, `changeradar.cmd` can be used when PowerShell blocks npm's `.ps1` shim. Remove a global installation with `npm uninstall --global changeradar`.
-
-### After npm Publication
-
-Only after `changeradar@0.1.1` is confirmed on the npm registry as this project's package, the equivalent commands are:
-
-```bash
-npx changeradar@0.1.1 analyze main...HEAD
-npm install --global changeradar@0.1.1
-```
-
-The pinned version makes the selected tool explicit. This section does not imply that registry publication has already completed.
 
 ## At a Glance
 
@@ -267,7 +280,7 @@ The full example uploads the report for exits `0` and `1`, including HIGH findin
 
 Actions are pinned to verified full commit SHAs, credentials are not persisted, and permissions are limited to `contents: read`, following [GitHub's secure-use guidance](https://docs.github.com/en/actions/reference/security/secure-use). The example uses `pull_request`, not a privileged `pull_request_target` workflow, and does not require deployment credentials, secrets, a GitHub App, or PR comments.
 
-For another application repository, provide a trusted built copy of ChangeRadar and invoke its CLI by absolute path while the working directory is the application's Git tree. Do not build the tool from untrusted application PR code or run the application's install/build scripts just to scan its changes. This source-build example is for testing ChangeRadar itself on a disposable hosted runner. Registry installation requires a verified npm release; do not assume a bare `npx changeradar` command selects this project before that release exists.
+For another application repository, provide a trusted built copy of ChangeRadar and invoke its CLI by absolute path while the working directory is the application's Git tree. Do not build the tool from untrusted application PR code or run the application's install/build scripts just to scan its changes. This source-build example is for testing ChangeRadar itself on a disposable hosted runner. If obtaining the tool from npm in CI, pin a reviewed version such as `changeradar@0.1.1` and keep that tool installation separate from the untrusted application checkout.
 
 Missing refs/history or no common ancestor are tool errors, never an assumed clean result. Fetch the required history before analyzing. For a push workflow, use the event's before/after SHAs with two-dot semantics instead; branch-creation events with an all-zero before SHA need an explicit baseline policy.
 
